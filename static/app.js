@@ -1,4 +1,4 @@
-// --- 3D Multiplayer Parkour Space with Jump, Dash & Emotes ---
+// --- 3D Multiplayer Parkour Space with Jump, Directional Dash & Dual Difficulty Courses ---
 
 // Three.js 전역 상태
 let scene, camera, renderer;
@@ -13,9 +13,9 @@ let isGrounded = true;
 const GRAVITY = -26.0;
 const JUMP_FORCE = 11.2;
 const NORMAL_SPEED = 6.2;
-const DASH_SPEED = 20.0;
+const DASH_SPEED = 21.0;
 const DASH_DURATION = 0.22; // 대시 지속 시간(초)
-const DASH_COOLDOWN = 1.2; // 대시 쿨다운(초)
+const DASH_COOLDOWN = 1.0; // 대시 쿨다운(초)
 
 let isDashing = false;
 let dashTimer = 0;
@@ -24,9 +24,9 @@ let dashDirection = new THREE.Vector3();
 
 // 점프맵 발판 목록
 const parkourPlatforms = [];
-let goalPlatform = null;
-let trophyMesh = null;
-let hasClearedParkour = false;
+let trophyNormalMesh = null;
+let trophyHardMesh = null;
+let clearedCourses = { normal: false, hard: false };
 
 // 활성화된 이모티콘 애니메이션 목록
 const activeEmoteSprites = [];
@@ -64,7 +64,7 @@ function init() {
   // 1-1. 씬 생성
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x090d16);
-  scene.fog = new THREE.FogExp2(0x090d16, 0.012);
+  scene.fog = new THREE.FogExp2(0x090d16, 0.010);
 
   // 1-2. 카메라 생성
   camera = new THREE.PerspectiveCamera(
@@ -73,7 +73,7 @@ function init() {
     0.1,
     1000
   );
-  camera.position.set(0, 6, 12);
+  camera.position.set(0, 7, 14);
 
   // 1-3. 렌더러 생성
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -84,32 +84,37 @@ function init() {
   container.appendChild(renderer.domElement);
 
   // 1-4. 조명 설정
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.72);
   scene.add(ambientLight);
 
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-  dirLight.position.set(30, 50, 30);
+  dirLight.position.set(30, 60, 30);
   dirLight.castShadow = true;
   dirLight.shadow.mapSize.width = 2048;
   dirLight.shadow.mapSize.height = 2048;
   dirLight.shadow.camera.near = 0.5;
-  dirLight.shadow.camera.far = 200;
-  const d = 40;
+  dirLight.shadow.camera.far = 250;
+  const d = 50;
   dirLight.shadow.camera.left = -d;
   dirLight.shadow.camera.right = d;
   dirLight.shadow.camera.top = d;
   dirLight.shadow.camera.bottom = -d;
   scene.add(dirLight);
 
-  // 부드러운 포인트 라이트 (정상 트로피 주변)
-  const goalLight = new THREE.PointLight(0xf59e0b, 2.5, 30);
-  goalLight.position.set(0, 16, -42);
-  scene.add(goalLight);
+  // 노멀 코스 정상 빛 (시안/골드)
+  const normalGoalLight = new THREE.PointLight(0x38bdf8, 2.5, 35);
+  normalGoalLight.position.set(-16, 16, -45);
+  scene.add(normalGoalLight);
+
+  // 하드 코스 정상 빛 (마그마 레드/퍼플)
+  const hardGoalLight = new THREE.PointLight(0xef4444, 3.5, 45);
+  hardGoalLight.position.set(16, 23, -56);
+  scene.add(hardGoalLight);
 
   // 1-5. 기본 바닥 평면 생성
-  const groundGeo = new THREE.PlaneGeometry(400, 400);
+  const groundGeo = new THREE.PlaneGeometry(500, 500);
   const groundMat = new THREE.MeshStandardMaterial({
-    color: 0x0f172a,
+    color: 0x0b0f19,
     roughness: 0.85,
     metalness: 0.1
   });
@@ -119,12 +124,12 @@ function init() {
   scene.add(ground);
 
   // 1-6. 네온 블루 바닥 격자
-  const gridHelper = new THREE.GridHelper(200, 100, 0x38bdf8, 0x1e293b);
+  const gridHelper = new THREE.GridHelper(300, 150, 0x38bdf8, 0x1e293b);
   gridHelper.position.y = 0.01;
   scene.add(gridHelper);
 
-  // 1-7. 점프맵(Parkour Course) 생성
-  buildParkourCourse();
+  // 1-7. 점프맵 코스들 (Normal & Hard) 생성
+  buildAllParkourCourses();
 
   // 1-8. 이벤트 리스너 등록
   setupEventListeners();
@@ -137,85 +142,125 @@ function init() {
 }
 
 // ==========================================
-// 2. 점프맵 (Parkour Obstacle Course) 생성
+// 2. 점프맵 2개 코스 (Normal & Hard) 생성
 // ==========================================
-function buildParkourCourse() {
-  // 플랫폼 정의 배열: [x, y, z, width, height, depth, colorHex, isGoal]
-  const platformData = [
-    // [구간 1] 시작 진입 계단
-    [0, 0.4, 0, 5, 0.8, 5, 0x3b82f6],
-    [0, 1.2, -4.5, 3.5, 0.8, 3.5, 0x06b6d4],
-    [0, 2.2, -9.0, 3.0, 0.8, 3.0, 0x10b981],
+function buildAllParkourCourses() {
+  // ----------------------------------------------------
+  // 코스 1: 🟢 NORMAL COURSE (초·중급 네온 블루 코스)
+  // ----------------------------------------------------
+  const normalPlatforms = [
+    // [x, y, z, width, height, depth, colorHex, isGoal, courseType]
+    [-15, 0.4, 0, 5.0, 0.8, 5.0, 0x3b82f6],
+    [-15, 1.4, -4.5, 3.6, 0.8, 3.6, 0x06b6d4],
+    [-15, 2.5, -9.0, 3.2, 0.8, 3.2, 0x10b981],
+    [-18.5, 3.7, -13.0, 2.8, 0.8, 2.8, 0x84cc16],
+    [-12.0, 5.0, -17.0, 2.6, 0.8, 2.6, 0xf59e0b],
+    [-15.0, 6.4, -21.0, 2.6, 0.8, 2.6, 0xf43f5e],
 
-    // [구간 2] 지그재그 징검다리 (기본 점프 연습)
-    [-3.2, 3.2, -12.5, 2.4, 0.8, 2.4, 0x84cc16],
-    [3.2, 4.3, -15.5, 2.2, 0.8, 2.2, 0xf59e0b],
-    [-2.5, 5.5, -19.0, 2.0, 0.8, 2.0, 0xf43f5e],
-    [2.8, 6.8, -22.5, 2.0, 0.8, 2.0, 0xa855f7],
+    // ⚡ 대시 점프 구간 (발판 거리 7m)
+    [-15.0, 8.0, -25.5, 3.4, 0.8, 3.2, 0xa855f7],
+    [-15.0, 9.3, -32.5, 3.2, 0.8, 3.2, 0xec4899], // 대시 착지
 
-    // [구간 3] ⚡ 대시 점프 구간! (거리가 넓어 대시(Shift)로 통과해야 함)
-    [0, 8.0, -26.5, 3.2, 0.8, 3.0, 0xec4899],
-    [0, 9.2, -33.5, 3.0, 0.8, 3.0, 0xf59e0b], // 7m 롱 점프 구간!
+    [-18.5, 11.0, -36.5, 2.6, 0.8, 2.6, 0x38bdf8],
+    [-13.0, 12.6, -40.5, 2.6, 0.8, 2.6, 0x10b981],
 
-    // [구간 4] 나선형 오르막 플랫폼
-    [-4.0, 10.6, -36.5, 2.4, 0.8, 2.4, 0x38bdf8],
-    [-2.0, 12.0, -40.0, 2.2, 0.8, 2.2, 0x10b981],
-    [2.5, 13.4, -42.0, 2.2, 0.8, 2.2, 0xa855f7],
-
-    // [구간 5] 🏆 최종 정상 승리 섬 (Goal Island)
-    [0, 14.8, -45.0, 7.0, 1.0, 7.0, 0xfbbf24, true]
+    // 🏆 노멀 정상 스카이 아일랜드
+    [-15.0, 14.5, -45.5, 6.5, 1.0, 6.5, 0xfbbf24, true, "normal"]
   ];
 
-  platformData.forEach(([px, py, pz, w, h, d, colorHex, isGoal]) => {
-    const geo = new THREE.BoxGeometry(w, h, d);
-    const mat = new THREE.MeshStandardMaterial({
-      color: colorHex,
-      roughness: 0.25,
-      metalness: 0.35,
-      emissive: isGoal ? 0x78350f : 0x0f172a,
-      emissiveIntensity: 0.4
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(px, py, pz);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
+  // ----------------------------------------------------
+  // 코스 2: 🔥 HARD COURSE (고난도/마그마 레드 지옥 코스)
+  // ----------------------------------------------------
+  const hardPlatforms = [
+    [15, 0.4, 0, 4.5, 0.8, 4.5, 0xd97706],
+    [15, 1.6, -4.5, 1.9, 0.8, 1.9, 0xef4444],
+    [15, 3.2, -8.8, 1.7, 0.8, 1.7, 0xb91c1c],
+    [19.2, 4.9, -13.0, 1.5, 0.8, 1.5, 0x991b1b],
+    [11.5, 6.7, -17.0, 1.5, 0.8, 1.5, 0xd97706],
+    [15.0, 8.6, -21.0, 1.4, 0.8, 1.4, 0xf97316],
 
-    // 네온 테두리 (Edges)
-    const edges = new THREE.EdgesGeometry(geo);
-    const lineMat = new THREE.LineBasicMaterial({
-      color: isGoal ? 0xffffff : 0xffffff,
-      transparent: true,
-      opacity: 0.45
-    });
-    const wireframe = new THREE.LineSegments(edges, lineMat);
-    mesh.add(wireframe);
+    // 🔥 1차 롱 대시 점프 (거리 8m)
+    [15.0, 10.3, -25.0, 2.4, 0.8, 2.4, 0x831843],
+    [15.0, 11.6, -33.0, 2.0, 0.8, 2.0, 0xbe185d], // 대시 착지
 
-    // 충돌 판정용 데이터 저장
-    const pObj = {
-      x: px,
-      y: py,
-      z: pz,
-      width: w,
-      height: h,
-      depth: d,
-      topY: py + h / 2,
-      isGoal: !!isGoal,
-      mesh: mesh
-    };
+    // 좁은 나선형 슬림 계단
+    [11.0, 13.4, -37.0, 1.4, 0.8, 1.4, 0x701a75],
+    [15.0, 15.2, -41.0, 1.3, 0.8, 1.3, 0x86198f],
+    [19.0, 17.0, -45.0, 1.3, 0.8, 1.3, 0xa21caf],
 
-    parkourPlatforms.push(pObj);
+    // 🔥 2차 익스트림 슈퍼 대시 점프 (높이 18.8m -> 21.0m, 거리 9m!)
+    [15.0, 18.8, -49.0, 2.2, 0.8, 2.2, 0xd946ef],
 
-    if (isGoal) {
-      goalPlatform = pObj;
-      createTrophy(px, py + h / 2 + 1.2, pz);
-    }
+    // 👑 하드 정상 지옥의 옥상 (높이 21m 상공)
+    [15.0, 21.0, -58.0, 7.5, 1.0, 7.5, 0xff0055, true, "hard"]
+  ];
+
+  // 노멀 코스 플랫폼 렌더
+  normalPlatforms.forEach(data => addPlatformToScene(data));
+
+  // 하드 코스 플랫폼 렌더
+  hardPlatforms.forEach(data => addPlatformToScene(data));
+
+  // 3D 안내 배너 설치
+  createBannerSprite("🟢 NORMAL COURSE", -15, 2.8, 0, "#38bdf8");
+  createBannerSprite("⚡ DASH JUMP!", -15, 10.5, -25.5, "#f59e0b");
+  createBannerSprite("🏆 NORMAL GOAL", -15, 17.8, -45.5, "#fbbf24");
+
+  createBannerSprite("🔥 HARD COURSE (지옥)", 15, 2.8, 0, "#ef4444");
+  createBannerSprite("⚠️ EXTREME DASH!", 15, 12.8, -25.0, "#f43f5e");
+  createBannerSprite("👑 HARD MASTER GOAL", 15, 24.5, -58.0, "#ff0077");
+
+  // 중앙 스폰 안내 표지판
+  createBannerSprite("⬅️ NORMAL   |   HARD ➡️", 0, 2.5, 4, "#ffffff");
+}
+
+function addPlatformToScene([px, py, pz, w, h, d, colorHex, isGoal, courseType]) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const mat = new THREE.MeshStandardMaterial({
+    color: colorHex,
+    roughness: 0.25,
+    metalness: 0.35,
+    emissive: isGoal ? (courseType === "hard" ? 0x9f1239 : 0x78350f) : 0x0f172a,
+    emissiveIntensity: 0.45
   });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(px, py, pz);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
 
-  // 점프맵 시작 안내 3D 배너
-  createBannerSprite("🏁 PARKOUR START", 0, 2.8, 0, "#38bdf8");
-  createBannerSprite("⚡ SHIFT TO DASH!", 0, 10.4, -26.5, "#f59e0b");
-  createBannerSprite("🏆 GOAL!", 0, 18.2, -45.0, "#fbbf24");
+  // 네온 테두리
+  const edges = new THREE.EdgesGeometry(geo);
+  const lineMat = new THREE.LineBasicMaterial({
+    color: isGoal ? 0xffffff : (courseType === "hard" ? 0xff4d4d : 0x38bdf8),
+    transparent: true,
+    opacity: 0.55
+  });
+  const wireframe = new THREE.LineSegments(edges, lineMat);
+  mesh.add(wireframe);
+
+  const pObj = {
+    x: px,
+    y: py,
+    z: pz,
+    width: w,
+    height: h,
+    depth: d,
+    topY: py + h / 2,
+    isGoal: !!isGoal,
+    courseType: courseType || "normal",
+    mesh: mesh
+  };
+
+  parkourPlatforms.push(pObj);
+
+  if (isGoal) {
+    if (courseType === "normal") {
+      trophyNormalMesh = createTrophy(px, py + h / 2 + 1.2, pz, 0xffd700);
+    } else if (courseType === "hard") {
+      trophyHardMesh = createCrown(px, py + h / 2 + 1.2, pz);
+    }
+  }
 }
 
 // 3D 텍스트 배너 스프라이트
@@ -228,7 +273,7 @@ function createBannerSprite(text, x, y, z, color = "#ffffff") {
   ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
   roundRect(ctx, 10, 10, 492, 108, 24, true);
 
-  ctx.font = 'bold 36px sans-serif';
+  ctx.font = 'bold 34px sans-serif';
   ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -239,49 +284,73 @@ function createBannerSprite(text, x, y, z, color = "#ffffff") {
   const spriteMat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
   const sprite = new THREE.Sprite(spriteMat);
   sprite.position.set(x, y, z);
-  sprite.scale.set(4.0, 1.0, 1);
+  sprite.scale.set(4.2, 1.05, 1);
   scene.add(sprite);
 }
 
 // 황금 트로피 3D 모델
-function createTrophy(x, y, z) {
+function createTrophy(x, y, z, colorHex) {
   const trophyGroup = new THREE.Group();
   const goldMat = new THREE.MeshStandardMaterial({
-    color: 0xffd700,
+    color: colorHex,
     metalness: 0.85,
     roughness: 0.15,
     emissive: 0xd97706,
     emissiveIntensity: 0.35
   });
 
-  // 받침대
-  const baseGeo = new THREE.CylinderGeometry(0.5, 0.6, 0.3, 16);
-  const base = new THREE.Mesh(baseGeo, goldMat);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.3, 16), goldMat);
   trophyGroup.add(base);
 
-  // 기둥
-  const stemGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.6, 16);
-  const stem = new THREE.Mesh(stemGeo, goldMat);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.6, 16), goldMat);
   stem.position.y = 0.45;
   trophyGroup.add(stem);
 
-  // 컵
-  const cupGeo = new THREE.CylinderGeometry(0.65, 0.25, 0.9, 16);
-  const cup = new THREE.Mesh(cupGeo, goldMat);
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.25, 0.9, 16), goldMat);
   cup.position.y = 1.1;
   trophyGroup.add(cup);
 
-  // 빛나는 링
-  const ringGeo = new THREE.TorusGeometry(0.9, 0.05, 8, 32);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
-  const ring = new THREE.Mesh(ringGeo, ringMat);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.05, 8, 32), new THREE.MeshBasicMaterial({ color: 0xfef08a }));
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 1.2;
   trophyGroup.add(ring);
 
   trophyGroup.position.set(x, y, z);
   scene.add(trophyGroup);
-  trophyMesh = trophyGroup;
+  return trophyGroup;
+}
+
+// 루비/골드 왕관 3D 모델 (하드 코스 정상)
+function createCrown(x, y, z) {
+  const crownGroup = new THREE.Group();
+  const crownMat = new THREE.MeshStandardMaterial({
+    color: 0xff0055,
+    metalness: 0.9,
+    roughness: 0.1,
+    emissive: 0xbe123c,
+    emissiveIntensity: 0.5
+  });
+
+  // 링 베이스
+  const baseRing = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.6, 0.3, 16, 1, true), crownMat);
+  crownGroup.add(baseRing);
+
+  // 뾰족한 왕관 스파이크 5개
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI * 2;
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.7, 8), crownMat);
+    spike.position.set(Math.cos(angle) * 0.65, 0.5, Math.sin(angle) * 0.65);
+    crownGroup.add(spike);
+
+    // 보석 구체
+    const jewel = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), new THREE.MeshBasicMaterial({ color: 0xfef08a }));
+    jewel.position.set(Math.cos(angle) * 0.65, 0.9, Math.sin(angle) * 0.65);
+    crownGroup.add(jewel);
+  }
+
+  crownGroup.position.set(x, y, z);
+  scene.add(crownGroup);
+  return crownGroup;
 }
 
 // ==========================================
@@ -290,7 +359,6 @@ function createTrophy(x, y, z) {
 function createAvatarMesh(colorHex, isSelf, nameText) {
   const avatarGroup = new THREE.Group();
 
-  // 몸체
   const bodyGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.9, 16);
   const bodyMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(colorHex),
@@ -410,7 +478,6 @@ function spawnEmoteSprite(avatarGroup, emoteText) {
   const sprite = new THREE.Sprite(spriteMat);
   sprite.scale.set(1.1, 1.1, 1);
 
-  // 아바타 머리 위 위치에 스폰
   sprite.position.copy(avatarGroup.position);
   sprite.position.y += 2.0;
 
@@ -430,10 +497,8 @@ function updateEmoteSprites(delta) {
     item.lifetime += delta;
     const progress = item.lifetime / item.maxLife;
 
-    // 위로 둥실 떠오름
     item.sprite.position.y += delta * 1.2;
 
-    // 스케일 팝업 효과
     if (progress < 0.25) {
       const scale = THREE.MathUtils.lerp(0.4, 1.3, progress / 0.25);
       item.sprite.scale.set(scale, scale, 1);
@@ -442,12 +507,10 @@ function updateEmoteSprites(delta) {
       item.sprite.scale.set(scale, scale, 1);
     }
 
-    // 페이드아웃
     if (progress > 0.6) {
       item.sprite.material.opacity = 1 - (progress - 0.6) / 0.4;
     }
 
-    // 소멸
     if (item.lifetime >= item.maxLife) {
       scene.remove(item.sprite);
       item.sprite.geometry.dispose();
@@ -457,14 +520,11 @@ function updateEmoteSprites(delta) {
   }
 }
 
-// 이모티콘 전송
 function triggerEmote(emote) {
   if (!myMesh || !myId) return;
 
-  // 내 아바타 머리 위에 이모티콘 표시
   spawnEmoteSprite(myMesh, emote);
 
-  // 서버로 브로드캐스트
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
       type: 'emote',
@@ -595,7 +655,7 @@ function sendMyMovement() {
 }
 
 // ==========================================
-// 6. 점프, 대시 & 3D 물리/충돌 판정
+// 6. 점프, 방향키 대시 & 3D 물리/충돌 판정
 // ==========================================
 function performJump() {
   if (isGrounded) {
@@ -604,15 +664,45 @@ function performJump() {
   }
 }
 
+// ⭐ 사용자가 누르고 있는 키 방향으로 완벽하게 대시!
 function performDash() {
   if (dashCooldownTimer <= 0 && !isDashing) {
+    // 1. 현재 누르고 있는 키(W, A, S, D) 방향 계산
+    let moveX = 0;
+    let moveZ = 0;
+    if (keys.w) moveZ -= 1;
+    if (keys.s) moveZ += 1;
+    if (keys.a) moveX -= 1;
+    if (keys.d) moveX += 1;
+
+    // 카메라의 수평 방향 기준
+    const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngleY);
+    const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraAngleY);
+
+    if (moveX !== 0 || moveZ !== 0) {
+      // 키를 누르고 있는 경우: 해당 키의 합성 벡터 방향으로 대시!
+      const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
+      moveX /= len;
+      moveZ /= len;
+
+      dashDirection.set(0, 0, 0)
+        .addScaledVector(forward, -moveZ)
+        .addScaledVector(right, moveX)
+        .normalize();
+    } else {
+      // 아무 키도 안 누르고 있다면: 캐릭터가 바라보고 있는 전방으로 대시
+      const charHeading = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), myMesh ? myMesh.rotation.y : cameraAngleY);
+      dashDirection.copy(charHeading).normalize();
+    }
+
+    // 아바타의 시선(회전)도 즉시 대시 방향으로 일치시킴
+    if (myMesh) {
+      myMesh.rotation.y = Math.atan2(dashDirection.x, dashDirection.z);
+    }
+
     isDashing = true;
     dashTimer = DASH_DURATION;
     dashCooldownTimer = DASH_COOLDOWN;
-
-    // 현재 바라보는 방향 또는 이동 키 방향으로 대시
-    const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), myMesh ? myMesh.rotation.y : 0);
-    dashDirection.copy(forward).normalize();
 
     showToast("⚡ DASH!");
   }
@@ -621,7 +711,7 @@ function performDash() {
 function updateLocalPlayerPhysics(delta) {
   if (!myMesh) return;
 
-  // 1. 대시 타이머 업데이트
+  // 1. 대시 쿨다운 타이머
   if (dashCooldownTimer > 0) {
     dashCooldownTimer -= delta;
   }
@@ -636,7 +726,7 @@ function updateLocalPlayerPhysics(delta) {
     }
   }
 
-  // 2. 키보드 이동 입력 계산
+  // 2. 이동 입력 계산
   let moveX = 0;
   let moveZ = 0;
 
@@ -663,7 +753,7 @@ function updateLocalPlayerPhysics(delta) {
     myMesh.position.x += moveDir.x * currentSpeed * delta;
     myMesh.position.z += moveDir.z * currentSpeed * delta;
 
-    // 이동 방향 회전
+    // 이동 방향 부드러운 회전
     const targetAngle = Math.atan2(moveDir.x, moveDir.z);
     myMesh.rotation.y = lerpAngle(myMesh.rotation.y, targetAngle, 0.25);
 
@@ -672,7 +762,7 @@ function updateLocalPlayerPhysics(delta) {
       myMesh.rotation.z = Math.sin(localWalkTimer) * 0.05;
     }
   } else if (isDashing) {
-    // 대시 중에는 대시 방향으로 빠르게 이동
+    // 대시 중에는 지정된 대시 방향으로 강력하게 돌진!
     myMesh.position.x += dashDirection.x * currentSpeed * delta;
     myMesh.position.z += dashDirection.z * currentSpeed * delta;
     myMesh.rotation.x = 0.25; // 몸체 앞으로 숙임
@@ -681,7 +771,7 @@ function updateLocalPlayerPhysics(delta) {
     myMesh.rotation.x = THREE.MathUtils.lerp(myMesh.rotation.x, 0, 0.2);
   }
 
-  // 3. 중력 & 수직 속도 적용
+  // 3. 중력 & 수직 속도
   playerVelocityY += GRAVITY * delta;
   myMesh.position.y += playerVelocityY * delta;
 
@@ -696,22 +786,26 @@ function updateLocalPlayerPhysics(delta) {
     const minZ = plat.z - plat.depth / 2 - playerRadius;
     const maxZ = plat.z + plat.depth / 2 + playerRadius;
 
-    // 수평 범위 체크
     if (myMesh.position.x >= minX && myMesh.position.x <= maxX &&
         myMesh.position.z >= minZ && myMesh.position.z <= maxZ) {
       
-      // 발이 플랫폼 상단 근처에 있고 아래로 떨어지는 중일 때 착지
-      if (playerFootY <= plat.topY + 0.35 && playerFootY >= plat.topY - 0.6 && playerVelocityY <= 0) {
+      if (playerFootY <= plat.topY + 0.38 && playerFootY >= plat.topY - 0.65 && playerVelocityY <= 0) {
         myMesh.position.y = plat.topY;
         playerVelocityY = 0;
         isGrounded = true;
         landedOnPlatform = true;
 
-        // 최종 골 플랫폼 도달 체크!
-        if (plat.isGoal && !hasClearedParkour) {
-          hasClearedParkour = true;
-          triggerEmote("🏆");
-          showToast("🎉 축하합니다! 점프맵을 완주하셨습니다! 🏆");
+        // 최종 골 플랫폼 클리어 체크!
+        if (plat.isGoal) {
+          if (plat.courseType === "normal" && !clearedCourses.normal) {
+            clearedCourses.normal = true;
+            triggerEmote("🏆");
+            showToast("🎉 [NORMAL] 초·중급 점프맵을 완주하셨습니다! 🏆");
+          } else if (plat.courseType === "hard" && !clearedCourses.hard) {
+            clearedCourses.hard = true;
+            triggerEmote("👑");
+            showToast("🔥 [HARD] 지옥의 하드 점프맵을 정복하셨습니다! 진정한 마스터! 👑");
+          }
         }
         break;
       }
@@ -724,13 +818,15 @@ function updateLocalPlayerPhysics(delta) {
       myMesh.position.y = 0;
       playerVelocityY = 0;
       isGrounded = true;
-      hasClearedParkour = false; // 바닥으로 떨어지면 클리어 상태 리셋
+      // 바닥으로 떨어지면 클리어 상태 리셋 (다시 도전 가능)
+      clearedCourses.normal = false;
+      clearedCourses.hard = false;
     } else {
       isGrounded = false;
     }
   }
 
-  // 6. 위치 서버로 전송
+  // 6. 위치 서버 전송
   sendMyMovement();
 
   // 7. 카메라 추적
@@ -774,7 +870,6 @@ function updateRemotePlayers(delta) {
     if (id === myId) continue;
     const p = players[id];
 
-    // 3차원 위치 Lerp (x, y, z 모두 부드럽게)
     p.mesh.position.lerp(p.targetPos, 0.25);
     p.mesh.rotation.y = lerpAngle(p.mesh.rotation.y, p.targetRot, 0.25);
   }
@@ -794,13 +889,12 @@ function setupEventListeners() {
   window.addEventListener('keydown', (e) => {
     handleKey(e.code, true);
 
-    // 단축키: 숫자키 1~6 이모티콘
     if (e.key === '1') triggerEmote("👋");
     else if (e.key === '2') triggerEmote("❤️");
     else if (e.key === '3') triggerEmote("😂");
     else if (e.key === '4') triggerEmote("🎉");
     else if (e.key === '5') triggerEmote("🔥");
-    else if (e.key === '6') triggerEmote("🏆");
+    else if (e.key === '6') triggerEmote("👑");
   });
 
   window.addEventListener('keyup', (e) => {
@@ -828,10 +922,10 @@ function setupEventListeners() {
 
   window.addEventListener('wheel', (e) => {
     cameraDistance += e.deltaY * 0.005;
-    cameraDistance = Math.max(3.0, Math.min(24.0, cameraDistance));
+    cameraDistance = Math.max(3.0, Math.min(26.0, cameraDistance));
   }, { passive: true });
 
-  // 이모티콘 바 버튼 클릭
+  // 이모티콘 바 버튼
   const emoteButtons = document.querySelectorAll('.emote-btn');
   emoteButtons.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -840,14 +934,36 @@ function setupEventListeners() {
     });
   });
 
-  // 시작 위치 리셋 버튼
+  // 상단 순간이동 바로가기 버튼들
+  const tpNormalBtn = document.getElementById('tp-normal-btn');
+  if (tpNormalBtn) {
+    tpNormalBtn.addEventListener('click', () => {
+      if (myMesh) {
+        myMesh.position.set(-15, 1.2, 3);
+        playerVelocityY = 0;
+        showToast("🟢 노멀 코스 입구로 이동했습니다!");
+      }
+    });
+  }
+
+  const tpHardBtn = document.getElementById('tp-hard-btn');
+  if (tpHardBtn) {
+    tpHardBtn.addEventListener('click', () => {
+      if (myMesh) {
+        myMesh.position.set(15, 1.2, 3);
+        playerVelocityY = 0;
+        showToast("🔥 하드 코스 입구로 이동했습니다! (조심하세요!)");
+      }
+    });
+  }
+
   const resetBtn = document.getElementById('reset-pos-btn');
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
       if (myMesh) {
-        myMesh.position.set(0, 1.2, 3);
+        myMesh.position.set(0, 1.2, 5);
         playerVelocityY = 0;
-        showToast("시작 위치로 순간이동했습니다!");
+        showToast("중앙 스폰 광장으로 이동했습니다!");
       }
     });
   }
@@ -943,9 +1059,12 @@ function animate() {
   const delta = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
-  // 1. 트로피 회전 연출
-  if (trophyMesh) {
-    trophyMesh.rotation.y += delta * 1.5;
+  // 1. 노멀 트로피 & 하드 왕관 회전 연출
+  if (trophyNormalMesh) {
+    trophyNormalMesh.rotation.y += delta * 1.5;
+  }
+  if (trophyHardMesh) {
+    trophyHardMesh.rotation.y -= delta * 1.8;
   }
 
   // 2. 내 플레이어 물리/점프/대시 갱신

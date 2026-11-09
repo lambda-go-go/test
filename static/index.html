@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>3D Multiplayer Parkour Space</title>
-  <link rel="stylesheet" href="/static/style.css?v=3.0">
+  <link rel="stylesheet" href="/static/style.css?v=4.0">
   <!-- Three.js CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
@@ -22,8 +22,15 @@
         <span id="player-count" class="badge">온라인: 1명</span>
       </div>
       <div class="actions">
-        <button id="reset-pos-btn" class="btn btn-secondary" title="시작 위치로 순간이동">
-          <span>🔄 시작점으로</span>
+        <!-- 난이도별 코스 이동 바로가기 버튼들 -->
+        <button id="tp-normal-btn" class="btn btn-course btn-normal" title="노멀 코스 입구로 이동">
+          <span>🟢 노멀 코스</span>
+        </button>
+        <button id="tp-hard-btn" class="btn btn-course btn-hard" title="하드 코스 입구로 이동">
+          <span>🔥 하드 코스</span>
+        </button>
+        <button id="reset-pos-btn" class="btn btn-secondary" title="중앙 스폰으로 이동">
+          <span>🔄 스폰</span>
         </button>
         <button id="copy-link-btn" class="btn btn-primary" title="친구에게 보낼 주소 복사">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -48,7 +55,7 @@
         </div>
         <div class="instruction-item">
           <kbd>Shift</kbd>
-          <span>대시 (순간 가속)</span>
+          <span>방향키 대시 (원하는 방향으로 돌진!)</span>
         </div>
         <div class="instruction-item">
           <kbd>1~6</kbd>
@@ -65,7 +72,7 @@
         <button class="emote-btn" data-emote="😂" title="웃음 [3]"><span>😂</span><small>3</small></button>
         <button class="emote-btn" data-emote="🎉" title="축하 [4]"><span>🎉</span><small>4</small></button>
         <button class="emote-btn" data-emote="🔥" title="불꽃 [5]"><span>🔥</span><small>5</small></button>
-        <button class="emote-btn" data-emote="🏆" title="승리 [6]"><span>🏆</span><small>6</small></button>
+        <button class="emote-btn" data-emote="👑" title="왕관 [6]"><span>👑</span><small>6</small></button>
       </div>
     </div>
 
@@ -89,10 +96,10 @@
       </div>
     </div>
 
-    <!-- 복사/클리어 알림 토스트 메시지 -->
+    <!-- 알림 토스트 메시지 -->
     <div id="toast" class="toast">접속 주소가 클립보드에 복사되었습니다!</div>
   </div>
 
-  <script src="/static/app.js?v=3.0"></script>
+  <script src="/static/app.js?v=4.0"></script>
 </body>
 </html>
