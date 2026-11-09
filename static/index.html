@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>3D Multiplayer Space</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Three.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <!-- 3D 렌더링 캔버스 컨테이너 -->
+  <div id="canvas-container"></div>
+
+  <!-- UI 오버레이 -->
+  <div class="ui-layer">
+    <!-- 상단 바 -->
+    <header class="top-bar">
+      <div class="brand">
+        <span class="status-dot"></span>
+        <span class="title">3D Space</span>
+        <span id="player-count" class="badge">온라인: 1명</span>
+      </div>
+      <div class="actions">
+        <button id="copy-link-btn" class="btn btn-primary" title="친구에게 보낼 주소 복사">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+          <span id="copy-btn-text">링크 복사</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- 하단 조작 가이드 -->
+    <div class="bottom-bar">
+      <div class="instructions-card">
+        <div class="instruction-item">
+          <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>방향키</kbd>
+          <span>이동</span>
+        </div>
+        <div class="instruction-item">
+          <span>마우스 드래그</span>
+          <span>시점 회전</span>
+        </div>
+        <div class="instruction-item">
+          <span>마우스 휠</span>
+          <span>줌 인/아웃</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 모바일 가상 조이스틱 (터치 디바이스용) -->
+    <div id="mobile-controls" class="mobile-only">
+      <div class="d-pad">
+        <button class="d-btn up" data-key="KeyW">▲</button>
+        <div class="d-row">
+          <button class="d-btn left" data-key="KeyA">◀</button>
+          <button class="d-btn down" data-key="KeyS">▼</button>
+          <button class="d-btn right" data-key="KeyD">▶</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 복사 알림 토스트 메시지 -->
+    <div id="toast" class="toast">접속 주소가 클립보드에 복사되었습니다!</div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
