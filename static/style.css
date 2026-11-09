@@ -50,7 +50,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: rgba(17, 24, 39, 0.75);
+  background: rgba(17, 24, 39, 0.8);
   backdrop-filter: blur(8px);
   padding: 8px 16px;
   border-radius: 9999px;
@@ -88,12 +88,6 @@ html, body {
   border: 1px solid rgba(56, 189, 248, 0.3);
 }
 
-.call-badge {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-  border-color: rgba(16, 185, 129, 0.4);
-}
-
 .actions {
   display: flex;
   gap: 8px;
@@ -124,26 +118,33 @@ html, body {
   transform: translateY(-1px);
 }
 
-.btn-primary:active {
-  transform: translateY(0);
+.btn-secondary {
+  background: rgba(30, 41, 59, 0.85);
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
-/* 하단 안내 카드 */
+.btn-secondary:hover {
+  background: rgba(51, 65, 85, 0.9);
+  color: white;
+}
+
+/* 하단 키보드 안내 카드 */
 .bottom-bar {
   display: flex;
   justify-content: center;
   align-items: flex-end;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .instructions-card {
   pointer-events: auto;
   display: flex;
-  gap: 20px;
-  background: rgba(17, 24, 39, 0.7);
+  gap: 16px;
+  background: rgba(17, 24, 39, 0.75);
   backdrop-filter: blur(8px);
-  padding: 10px 20px;
-  border-radius: 16px;
+  padding: 8px 18px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   font-size: 12px;
@@ -167,31 +168,91 @@ kbd {
   font-family: monospace;
 }
 
-/* 모바일 D-PAD 버튼 */
+/* ==========================================
+   이모티콘 감정표현 바 (중앙 하단)
+========================================== */
+.emote-bar-container {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  z-index: 20;
+}
+
+.emote-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  padding: 6px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.emote-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.emote-btn span {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.emote-btn small {
+  font-size: 9px;
+  color: #94a3b8;
+  font-weight: 700;
+  margin-top: 1px;
+}
+
+.emote-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-4px) scale(1.18);
+}
+
+.emote-btn:active {
+  transform: translateY(0) scale(0.95);
+}
+
+/* ==========================================
+   모바일 터치 컨트롤 (D-PAD & JUMP/DASH)
+========================================== */
 .mobile-only {
   display: none;
 }
 
 @media (pointer: coarse), (max-width: 768px) {
   .mobile-only {
-    display: block;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
     position: absolute;
     bottom: 24px;
-    left: 20px;
-    pointer-events: auto;
+    left: 16px;
+    right: 16px;
+    pointer-events: none;
   }
   
   .instructions-card {
     display: none;
   }
 
-  .call-widget {
-    bottom: 20px !important;
-    right: 16px !important;
-  }
-
-  .active-call-panel {
-    max-width: 280px !important;
+  .emote-bar-container {
+    bottom: 120px;
   }
 }
 
@@ -200,6 +261,7 @@ kbd {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  pointer-events: auto;
 }
 
 .d-row {
@@ -208,10 +270,10 @@ kbd {
 }
 
 .d-btn {
-  width: 50px;
-  height: 50px;
-  border-radius: 12px;
-  background: rgba(30, 41, 59, 0.85);
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: rgba(30, 41, 59, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: white;
   font-size: 18px;
@@ -222,178 +284,57 @@ kbd {
 }
 
 .d-btn:active {
-  background: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.85);
 }
 
-/* ==========================================
-   화상통화 위젯 스타일 (오른쪽 아래)
-========================================== */
-.call-widget {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
-  z-index: 50;
+/* 점프 / 대시 액션 버튼 */
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
 }
 
-/* 통화 참여 버튼 */
-.btn-call-join {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 24px;
-  border-radius: 9999px;
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  color: white;
-  font-size: 15px;
-  font-weight: 700;
-  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.btn-call-join:hover {
-  transform: translateY(-2px) scale(1.03);
-  box-shadow: 0 6px 22px rgba(16, 185, 129, 0.6);
-  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
-}
-
-.btn-call-join:active {
-  transform: translateY(0) scale(0.98);
-}
-
-/* 통화 활성 패널 */
-.active-call-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 320px;
-  max-width: 90vw;
-  background: rgba(15, 23, 42, 0.88);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
-  padding: 12px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-  animation: slideUp 0.25s ease-out;
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* 비디오 그리드 */
-.video-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 8px;
-  max-height: 320px;
-  overflow-y: auto;
-  border-radius: 10px;
-}
-
-.video-grid::-webkit-scrollbar {
-  width: 4px;
-}
-.video-grid::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-}
-
-.video-card {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  background: #090d16;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-}
-
-.video-card video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-#local-video {
-  transform: scaleX(-1); /* 거울 모드 */
-}
-
-.video-label {
-  position: absolute;
-  bottom: 6px;
-  left: 6px;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(4px);
-  color: #f3f4f6;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 6px;
-  pointer-events: none;
-  max-width: 85%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* 통화 컨트롤 툴바 */
-.call-controls {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 12px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.call-ctrl-btn {
-  width: 42px;
-  height: 42px;
+.action-btn {
+  width: 68px;
+  height: 68px;
   border-radius: 50%;
-  background: rgba(30, 41, 59, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 2px solid rgba(255, 255, 255, 0.25);
   color: white;
-  font-size: 16px;
+  font-size: 13px;
+  font-weight: 800;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
+  touch-action: manipulation;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s ease;
 }
 
-.call-ctrl-btn:hover {
-  background: rgba(51, 65, 85, 1);
-  transform: scale(1.05);
+.jump-btn {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
 }
 
-.call-ctrl-btn.off {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #ef4444;
+.jump-btn:active {
+  transform: scale(0.92);
+  background: #047857;
 }
 
-.call-ctrl-btn.btn-leave {
-  background: #ef4444;
-  border-color: transparent;
-  color: white;
+.dash-btn {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
 }
 
-.call-ctrl-btn.btn-leave:hover {
-  background: #dc2626;
-  transform: scale(1.08);
+.dash-btn:active {
+  transform: scale(0.92);
+  background: #b45309;
 }
 
-/* 토스트 팝업 */
+.action-btn.cooldown {
+  opacity: 0.5;
+  filter: grayscale(0.8);
+}
+
+/* 알림 토스트 */
 .toast {
   position: absolute;
   top: 72px;
@@ -401,14 +342,14 @@ kbd {
   transform: translateX(-50%) translateY(-20px);
   background: rgba(16, 185, 129, 0.95);
   color: white;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
   opacity: 0;
   pointer-events: none;
-  transition: all 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .toast.show {

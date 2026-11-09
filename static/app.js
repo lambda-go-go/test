@@ -1,47 +1,59 @@
-// --- Three.js & WebSocket & WebRTC Video Call ---
+// --- 3D Multiplayer Parkour Space with Jump, Dash & Emotes ---
 
-// 3D 전역 상태
+// Three.js 전역 상태
 let scene, camera, renderer;
 let myId = null;
 let myColor = null;
 let myMesh = null;
-const players = {}; // id -> { mesh, targetPos, targetRot, isMoving, walkTimer, inCall }
+const players = {}; // id -> { mesh, targetPos, targetRot, isMoving, walkTimer }
+
+// 점프 & 대시 & 물리 상태
+let playerVelocityY = 0;
+let isGrounded = true;
+const GRAVITY = -26.0;
+const JUMP_FORCE = 11.2;
+const NORMAL_SPEED = 6.2;
+const DASH_SPEED = 20.0;
+const DASH_DURATION = 0.22; // 대시 지속 시간(초)
+const DASH_COOLDOWN = 1.2; // 대시 쿨다운(초)
+
+let isDashing = false;
+let dashTimer = 0;
+let dashCooldownTimer = 0;
+let dashDirection = new THREE.Vector3();
+
+// 점프맵 발판 목록
+const parkourPlatforms = [];
+let goalPlatform = null;
+let trophyMesh = null;
+let hasClearedParkour = false;
+
+// 활성화된 이모티콘 애니메이션 목록
+const activeEmoteSprites = [];
 
 // 키 입력 상태
-const keys = { w: false, a: false, s: false, d: false };
+const keys = {
+  w: false,
+  a: false,
+  s: false,
+  d: false,
+  space: false,
+  shift: false
+};
 
 // 카메라 컨트롤 변수
 let isMouseDown = false;
 let previousMousePosition = { x: 0, y: 0 };
 let cameraAngleY = 0;
-let cameraPitch = 0.45;
-let cameraDistance = 8.0;
+let cameraPitch = 0.42;
+let cameraDistance = 8.5;
 
 // 웹소켓
 let socket = null;
 let lastSentTime = 0;
 const SEND_INTERVAL = 33; // ~30fps
 
-// 걷기 애니메이션 변수
 let localWalkTimer = 0;
-
-// ==========================================
-// WebRTC 화상통화 상태
-// ==========================================
-let localStream = null;
-let isInCall = false;
-let isMicMuted = false;
-let isCamOff = false;
-const rtcPeers = {}; // peerId -> { pc, remoteStream, candidateQueue, isRemoteSet }
-
-// 무료 공개 Google STUN 서버
-const rtcConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ]
-};
 
 // ==========================================
 // 1. 초기화 함수
@@ -49,10 +61,10 @@ const rtcConfiguration = {
 function init() {
   const container = document.getElementById('canvas-container');
 
-  // 1-1. Three.js 씬 생성
+  // 1-1. 씬 생성
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0f19);
-  scene.fog = new THREE.FogExp2(0x0b0f19, 0.015);
+  scene.background = new THREE.Color(0x090d16);
+  scene.fog = new THREE.FogExp2(0x090d16, 0.012);
 
   // 1-2. 카메라 생성
   camera = new THREE.PerspectiveCamera(
@@ -61,7 +73,7 @@ function init() {
     0.1,
     1000
   );
-  camera.position.set(0, 5, 8);
+  camera.position.set(0, 6, 12);
 
   // 1-3. 렌더러 생성
   renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -72,22 +84,29 @@ function init() {
   container.appendChild(renderer.domElement);
 
   // 1-4. 조명 설정
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
   scene.add(ambientLight);
 
-  const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
-  dirLight.position.set(20, 40, 20);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  dirLight.position.set(30, 50, 30);
   dirLight.castShadow = true;
   dirLight.shadow.mapSize.width = 2048;
   dirLight.shadow.mapSize.height = 2048;
-  const d = 30;
+  dirLight.shadow.camera.near = 0.5;
+  dirLight.shadow.camera.far = 200;
+  const d = 40;
   dirLight.shadow.camera.left = -d;
   dirLight.shadow.camera.right = d;
   dirLight.shadow.camera.top = d;
   dirLight.shadow.camera.bottom = -d;
   scene.add(dirLight);
 
-  // 1-5. 바닥 평면 생성
+  // 부드러운 포인트 라이트 (정상 트로피 주변)
+  const goalLight = new THREE.PointLight(0xf59e0b, 2.5, 30);
+  goalLight.position.set(0, 16, -42);
+  scene.add(goalLight);
+
+  // 1-5. 기본 바닥 평면 생성
   const groundGeo = new THREE.PlaneGeometry(400, 400);
   const groundMat = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
@@ -99,26 +118,176 @@ function init() {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // 1-6. 격자 (GridHelper)
+  // 1-6. 네온 블루 바닥 격자
   const gridHelper = new THREE.GridHelper(200, 100, 0x38bdf8, 0x1e293b);
   gridHelper.position.y = 0.01;
   scene.add(gridHelper);
 
-  // 1-7. 이벤트 리스너 등록
-  setupEventListeners();
-  setupCallEventListeners();
+  // 1-7. 점프맵(Parkour Course) 생성
+  buildParkourCourse();
 
-  // 1-8. 웹소켓 연결
+  // 1-8. 이벤트 리스너 등록
+  setupEventListeners();
+
+  // 1-9. 웹소켓 연결
   connectWebSocket();
 
-  // 1-9. 렌더링 루프 시작
+  // 1-10. 렌더 루프 시작
   animate();
 }
 
 // ==========================================
-// 2. 아바타 생성 함수
+// 2. 점프맵 (Parkour Obstacle Course) 생성
 // ==========================================
-function createAvatarMesh(colorHex, isSelf, nameText, inCall = false) {
+function buildParkourCourse() {
+  // 플랫폼 정의 배열: [x, y, z, width, height, depth, colorHex, isGoal]
+  const platformData = [
+    // [구간 1] 시작 진입 계단
+    [0, 0.4, 0, 5, 0.8, 5, 0x3b82f6],
+    [0, 1.2, -4.5, 3.5, 0.8, 3.5, 0x06b6d4],
+    [0, 2.2, -9.0, 3.0, 0.8, 3.0, 0x10b981],
+
+    // [구간 2] 지그재그 징검다리 (기본 점프 연습)
+    [-3.2, 3.2, -12.5, 2.4, 0.8, 2.4, 0x84cc16],
+    [3.2, 4.3, -15.5, 2.2, 0.8, 2.2, 0xf59e0b],
+    [-2.5, 5.5, -19.0, 2.0, 0.8, 2.0, 0xf43f5e],
+    [2.8, 6.8, -22.5, 2.0, 0.8, 2.0, 0xa855f7],
+
+    // [구간 3] ⚡ 대시 점프 구간! (거리가 넓어 대시(Shift)로 통과해야 함)
+    [0, 8.0, -26.5, 3.2, 0.8, 3.0, 0xec4899],
+    [0, 9.2, -33.5, 3.0, 0.8, 3.0, 0xf59e0b], // 7m 롱 점프 구간!
+
+    // [구간 4] 나선형 오르막 플랫폼
+    [-4.0, 10.6, -36.5, 2.4, 0.8, 2.4, 0x38bdf8],
+    [-2.0, 12.0, -40.0, 2.2, 0.8, 2.2, 0x10b981],
+    [2.5, 13.4, -42.0, 2.2, 0.8, 2.2, 0xa855f7],
+
+    // [구간 5] 🏆 최종 정상 승리 섬 (Goal Island)
+    [0, 14.8, -45.0, 7.0, 1.0, 7.0, 0xfbbf24, true]
+  ];
+
+  platformData.forEach(([px, py, pz, w, h, d, colorHex, isGoal]) => {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshStandardMaterial({
+      color: colorHex,
+      roughness: 0.25,
+      metalness: 0.35,
+      emissive: isGoal ? 0x78350f : 0x0f172a,
+      emissiveIntensity: 0.4
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(px, py, pz);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+
+    // 네온 테두리 (Edges)
+    const edges = new THREE.EdgesGeometry(geo);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: isGoal ? 0xffffff : 0xffffff,
+      transparent: true,
+      opacity: 0.45
+    });
+    const wireframe = new THREE.LineSegments(edges, lineMat);
+    mesh.add(wireframe);
+
+    // 충돌 판정용 데이터 저장
+    const pObj = {
+      x: px,
+      y: py,
+      z: pz,
+      width: w,
+      height: h,
+      depth: d,
+      topY: py + h / 2,
+      isGoal: !!isGoal,
+      mesh: mesh
+    };
+
+    parkourPlatforms.push(pObj);
+
+    if (isGoal) {
+      goalPlatform = pObj;
+      createTrophy(px, py + h / 2 + 1.2, pz);
+    }
+  });
+
+  // 점프맵 시작 안내 3D 배너
+  createBannerSprite("🏁 PARKOUR START", 0, 2.8, 0, "#38bdf8");
+  createBannerSprite("⚡ SHIFT TO DASH!", 0, 10.4, -26.5, "#f59e0b");
+  createBannerSprite("🏆 GOAL!", 0, 18.2, -45.0, "#fbbf24");
+}
+
+// 3D 텍스트 배너 스프라이트
+function createBannerSprite(text, x, y, z, color = "#ffffff") {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  roundRect(ctx, 10, 10, 492, 108, 24, true);
+
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 256, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  const spriteMat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.position.set(x, y, z);
+  sprite.scale.set(4.0, 1.0, 1);
+  scene.add(sprite);
+}
+
+// 황금 트로피 3D 모델
+function createTrophy(x, y, z) {
+  const trophyGroup = new THREE.Group();
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: 0xffd700,
+    metalness: 0.85,
+    roughness: 0.15,
+    emissive: 0xd97706,
+    emissiveIntensity: 0.35
+  });
+
+  // 받침대
+  const baseGeo = new THREE.CylinderGeometry(0.5, 0.6, 0.3, 16);
+  const base = new THREE.Mesh(baseGeo, goldMat);
+  trophyGroup.add(base);
+
+  // 기둥
+  const stemGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.6, 16);
+  const stem = new THREE.Mesh(stemGeo, goldMat);
+  stem.position.y = 0.45;
+  trophyGroup.add(stem);
+
+  // 컵
+  const cupGeo = new THREE.CylinderGeometry(0.65, 0.25, 0.9, 16);
+  const cup = new THREE.Mesh(cupGeo, goldMat);
+  cup.position.y = 1.1;
+  trophyGroup.add(cup);
+
+  // 빛나는 링
+  const ringGeo = new THREE.TorusGeometry(0.9, 0.05, 8, 32);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 1.2;
+  trophyGroup.add(ring);
+
+  trophyGroup.position.set(x, y, z);
+  scene.add(trophyGroup);
+  trophyMesh = trophyGroup;
+}
+
+// ==========================================
+// 3. 아바타 생성 함수
+// ==========================================
+function createAvatarMesh(colorHex, isSelf, nameText) {
   const avatarGroup = new THREE.Group();
 
   // 몸체
@@ -170,29 +339,12 @@ function createAvatarMesh(colorHex, isSelf, nameText, inCall = false) {
   avatarGroup.add(shadow);
 
   // 닉네임 라벨
-  const labelText = inCall ? `🎥 ${nameText}` : nameText;
-  const labelSprite = createTextLabel(labelText, isSelf ? "#38bdf8" : (inCall ? "#10b981" : "#ffffff"));
+  const labelSprite = createTextLabel(nameText, isSelf ? "#38bdf8" : "#ffffff");
   labelSprite.name = "nameLabel";
   labelSprite.position.set(0, 1.8, 0);
   avatarGroup.add(labelSprite);
 
   return avatarGroup;
-}
-
-function updateAvatarLabel(player) {
-  if (!player || !player.mesh) return;
-  const isSelf = (player.mesh === myMesh);
-  const baseName = isSelf ? "나 (You)" : `Player ${player.mesh.userData.id.slice(-4)}`;
-  const labelText = player.inCall ? `🎥 ${baseName}` : baseName;
-  const color = isSelf ? "#38bdf8" : (player.inCall ? "#10b981" : "#ffffff");
-
-  const oldLabel = player.mesh.getObjectByName("nameLabel");
-  if (oldLabel) player.mesh.remove(oldLabel);
-
-  const newLabel = createTextLabel(labelText, color);
-  newLabel.name = "nameLabel";
-  newLabel.position.set(0, 1.8, 0);
-  player.mesh.add(newLabel);
 }
 
 function createTextLabel(text, textColor) {
@@ -234,7 +386,95 @@ function roundRect(ctx, x, y, width, height, radius, fill) {
 }
 
 // ==========================================
-// 3. WebSocket 네트워크 동기화 & WebRTC 시그널링
+// 4. 이모티콘 (Emote) 3D 팝업 시스템
+// ==========================================
+function spawnEmoteSprite(avatarGroup, emoteText) {
+  if (!avatarGroup) return;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+
+  ctx.font = '72px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoteText, 64, 64);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(1.1, 1.1, 1);
+
+  // 아바타 머리 위 위치에 스폰
+  sprite.position.copy(avatarGroup.position);
+  sprite.position.y += 2.0;
+
+  scene.add(sprite);
+
+  activeEmoteSprites.push({
+    sprite: sprite,
+    avatar: avatarGroup,
+    lifetime: 0,
+    maxLife: 1.6
+  });
+}
+
+function updateEmoteSprites(delta) {
+  for (let i = activeEmoteSprites.length - 1; i >= 0; i--) {
+    const item = activeEmoteSprites[i];
+    item.lifetime += delta;
+    const progress = item.lifetime / item.maxLife;
+
+    // 위로 둥실 떠오름
+    item.sprite.position.y += delta * 1.2;
+
+    // 스케일 팝업 효과
+    if (progress < 0.25) {
+      const scale = THREE.MathUtils.lerp(0.4, 1.3, progress / 0.25);
+      item.sprite.scale.set(scale, scale, 1);
+    } else {
+      const scale = THREE.MathUtils.lerp(1.3, 1.0, (progress - 0.25) / 0.75);
+      item.sprite.scale.set(scale, scale, 1);
+    }
+
+    // 페이드아웃
+    if (progress > 0.6) {
+      item.sprite.material.opacity = 1 - (progress - 0.6) / 0.4;
+    }
+
+    // 소멸
+    if (item.lifetime >= item.maxLife) {
+      scene.remove(item.sprite);
+      item.sprite.geometry.dispose();
+      item.sprite.material.dispose();
+      activeEmoteSprites.splice(i, 1);
+    }
+  }
+}
+
+// 이모티콘 전송
+function triggerEmote(emote) {
+  if (!myMesh || !myId) return;
+
+  // 내 아바타 머리 위에 이모티콘 표시
+  spawnEmoteSprite(myMesh, emote);
+
+  // 서버로 브로드캐스트
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({
+      type: 'emote',
+      emote: emote
+    }));
+  }
+}
+
+// ==========================================
+// 5. WebSocket 네트워크 동기화
 // ==========================================
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -243,13 +483,13 @@ function connectWebSocket() {
   socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
-    console.log("WebSocket connected:", wsUrl);
+    console.log("WebSocket connected to:", wsUrl);
   };
 
-  socket.onmessage = async (event) => {
+  socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      await handleServerMessage(data);
+      handleServerMessage(data);
     } catch (err) {
       console.error("Message parse error:", err);
     }
@@ -265,10 +505,9 @@ function connectWebSocket() {
   };
 }
 
-async function handleServerMessage(data) {
+function handleServerMessage(data) {
   const type = data.type;
 
-  // 1) 3D 공간 기본 동기화
   if (type === 'init') {
     myId = data.selfId;
     const initialPlayers = data.players || [];
@@ -294,47 +533,12 @@ async function handleServerMessage(data) {
   } 
   else if (type === 'player_left') {
     removePlayer(data.id);
-    closePeerConnection(data.id);
-    removeRemoteVideo(data.id);
     updatePlayerCount();
   }
-  else if (type === 'player_call_status') {
-    if (players[data.id]) {
-      players[data.id].inCall = data.inCall;
-      updateAvatarLabel(players[data.id]);
+  else if (type === 'player_emote') {
+    if (players[data.id] && data.id !== myId) {
+      spawnEmoteSprite(players[data.id].mesh, data.emote);
     }
-    updateCallCount();
-  }
-
-  // 2) WebRTC 화상통화 시그널링
-  else if (type === 'webrtc_existing_peers') {
-    const existingPeers = data.peers || [];
-    for (const peerId of existingPeers) {
-      if (peerId !== myId) {
-        await initiatePeerConnection(peerId);
-      }
-    }
-  }
-  else if (type === 'webrtc_peer_joined') {
-    console.log("New peer joined call:", data.peerId);
-  }
-  else if (type === 'webrtc_signal') {
-    const senderId = data.senderId;
-    const signal = data.signal;
-
-    if (signal.sdp) {
-      if (signal.sdp.type === 'offer') {
-        await handleReceiveOffer(senderId, signal.sdp);
-      } else if (signal.sdp.type === 'answer') {
-        await handleReceiveAnswer(senderId, signal.sdp);
-      }
-    } else if (signal.candidate) {
-      await handleReceiveCandidate(senderId, signal.candidate);
-    }
-  }
-  else if (type === 'webrtc_peer_left') {
-    closePeerConnection(data.peerId);
-    removeRemoteVideo(data.peerId);
   }
 }
 
@@ -342,8 +546,7 @@ function addPlayer(pData, isSelf) {
   if (players[pData.id]) return;
 
   const displayName = isSelf ? "나 (You)" : `Player ${pData.id.slice(-4)}`;
-  const mesh = createAvatarMesh(pData.color, isSelf, displayName, pData.inCall || false);
-  mesh.userData = { id: pData.id };
+  const mesh = createAvatarMesh(pData.color, isSelf, displayName);
   mesh.position.set(pData.x, pData.y, pData.z);
   mesh.rotation.y = pData.rotation || 0;
   scene.add(mesh);
@@ -353,8 +556,7 @@ function addPlayer(pData, isSelf) {
     targetPos: new THREE.Vector3(pData.x, pData.y, pData.z),
     targetRot: pData.rotation || 0,
     isMoving: false,
-    walkTimer: 0,
-    inCall: pData.inCall || false
+    walkTimer: 0
   };
 
   if (isSelf) {
@@ -376,19 +578,6 @@ function updatePlayerCount() {
   if (countEl) countEl.innerText = `온라인: ${count}명`;
 }
 
-function updateCallCount() {
-  const inCallCount = Object.values(players).filter(p => p.inCall).length;
-  const badge = document.getElementById('call-count');
-  if (badge) {
-    if (inCallCount > 0) {
-      badge.style.display = 'inline-block';
-      badge.innerText = `📞 통화 중: ${inCallCount}명`;
-    } else {
-      badge.style.display = 'none';
-    }
-  }
-}
-
 function sendMyMovement() {
   if (!socket || socket.readyState !== WebSocket.OPEN || !myMesh || !myId) return;
 
@@ -406,298 +595,48 @@ function sendMyMovement() {
 }
 
 // ==========================================
-// 4. WebRTC 실시간 화상통화 로직 (강화된 P2P)
+// 6. 점프, 대시 & 3D 물리/충돌 판정
 // ==========================================
-async function startVideoCall() {
-  try {
-    // 1. 카메라 & 마이크 권한 요청 (제약조건 실패 시 유연하게 재시도하는 Fallback 구현)
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640, max: 1280 },
-          height: { ideal: 480, max: 720 },
-          facingMode: "user"
-        },
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-    } catch (e1) {
-      console.warn("Retrying getUserMedia with relaxed constraints...", e1);
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
-      });
-    }
-
-    // 2. 내 로컬 비디오 화면에 표시
-    const localVideo = document.getElementById('local-video');
-    if (localVideo) {
-      localVideo.srcObject = localStream;
-      localVideo.muted = true; // 본인 하울링 방지
-      localVideo.setAttribute('playsinline', 'true');
-      localVideo.setAttribute('webkit-playsinline', 'true');
-      localVideo.play().catch(e => console.warn("Local video play:", e));
-    }
-
-    // 3. UI 활성화
-    document.getElementById('join-call-btn').style.display = 'none';
-    document.getElementById('active-call-panel').style.display = 'flex';
-    isInCall = true;
-
-    // 4. 서버에 통화 참여 전송
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'webrtc_join' }));
-    }
-
-    showToast("화상통화에 참여했습니다! 📹");
-  } catch (err) {
-    console.error("Camera access failed:", err);
-    alert("카메라 또는 마이크 권한을 허용해 주세요. (다른 앱에서 카메라를 사용 중인지도 확인해 보세요)");
+function performJump() {
+  if (isGrounded) {
+    playerVelocityY = JUMP_FORCE;
+    isGrounded = false;
   }
 }
 
-function leaveVideoCall() {
-  if (!isInCall) return;
+function performDash() {
+  if (dashCooldownTimer <= 0 && !isDashing) {
+    isDashing = true;
+    dashTimer = DASH_DURATION;
+    dashCooldownTimer = DASH_COOLDOWN;
 
-  if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
-    localStream = null;
-  }
+    // 현재 바라보는 방향 또는 이동 키 방향으로 대시
+    const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), myMesh ? myMesh.rotation.y : 0);
+    dashDirection.copy(forward).normalize();
 
-  for (const peerId in rtcPeers) {
-    closePeerConnection(peerId);
-    removeRemoteVideo(peerId);
-  }
-
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'webrtc_leave' }));
-  }
-
-  document.getElementById('active-call-panel').style.display = 'none';
-  document.getElementById('join-call-btn').style.display = 'flex';
-  isInCall = false;
-
-  showToast("통화를 종료했습니다.");
-}
-
-// RTCPeerConnection 생성 및 트랙 관리
-function getOrCreatePeer(peerId) {
-  if (rtcPeers[peerId]) return rtcPeers[peerId];
-
-  const pc = new RTCPeerConnection(rtcConfiguration);
-  const remoteStream = new MediaStream();
-
-  const peerEntry = {
-    pc: pc,
-    remoteStream: remoteStream,
-    candidateQueue: [],
-    isRemoteSet: false
-  };
-  rtcPeers[peerId] = peerEntry;
-
-  // 로컬 트랙 추가
-  if (localStream) {
-    localStream.getTracks().forEach(track => {
-      pc.addTrack(track, localStream);
-    });
-  }
-
-  // ICE Candidate 이벤트
-  pc.onicecandidate = (event) => {
-    if (event.candidate && socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: 'webrtc_signal',
-        targetId: peerId,
-        signal: { candidate: event.candidate }
-      }));
-    }
-  };
-
-  // 트랙 수신 시 (오디오/비디오 각각 처리)
-  pc.ontrack = (event) => {
-    console.log(`Received track from ${peerId}:`, event.track.kind);
-    remoteStream.addTrack(event.track);
-    addOrUpdateRemoteVideo(peerId, remoteStream);
-  };
-
-  pc.onconnectionstatechange = () => {
-    console.log(`Connection state with ${peerId}:`, pc.connectionState);
-    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-      closePeerConnection(peerId);
-      removeRemoteVideo(peerId);
-    }
-  };
-
-  return peerEntry;
-}
-
-// 내가 Offer를 생성해 상대방에게 연결 요청
-async function initiatePeerConnection(peerId) {
-  const peer = getOrCreatePeer(peerId);
-  try {
-    const offer = await peer.pc.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true
-    });
-    await peer.pc.setLocalDescription(offer);
-
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: 'webrtc_signal',
-        targetId: peerId,
-        signal: { sdp: peer.pc.localDescription }
-      }));
-    }
-  } catch (err) {
-    console.error("Error creating offer:", err);
+    showToast("⚡ DASH!");
   }
 }
 
-// 상대방의 Offer 수신 처리
-async function handleReceiveOffer(senderId, offerSdp) {
-  const peer = getOrCreatePeer(senderId);
-  try {
-    await peer.pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
-    peer.isRemoteSet = true;
-    await processCandidateQueue(peer);
-
-    const answer = await peer.pc.createAnswer();
-    await peer.pc.setLocalDescription(answer);
-
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: 'webrtc_signal',
-        targetId: senderId,
-        signal: { sdp: peer.pc.localDescription }
-      }));
-    }
-  } catch (err) {
-    console.error("Error handling offer:", err);
-  }
-}
-
-// Answer 수신 처리
-async function handleReceiveAnswer(senderId, answerSdp) {
-  const peer = rtcPeers[senderId];
-  if (peer && peer.pc) {
-    try {
-      await peer.pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
-      peer.isRemoteSet = true;
-      await processCandidateQueue(peer);
-    } catch (err) {
-      console.error("Error setting remote description from answer:", err);
-    }
-  }
-}
-
-// ICE Candidate 수신 처리 (RemoteDescription 대기 큐 지원)
-async function handleReceiveCandidate(senderId, candidateData) {
-  const peer = rtcPeers[senderId] || getOrCreatePeer(senderId);
-  if (!peer.isRemoteSet) {
-    peer.candidateQueue.push(candidateData);
-  } else {
-    try {
-      await peer.pc.addIceCandidate(new RTCIceCandidate(candidateData));
-    } catch (err) {
-      console.error("Error adding ice candidate:", err);
-    }
-  }
-}
-
-async function processCandidateQueue(peer) {
-  while (peer.candidateQueue.length > 0) {
-    const candidateData = peer.candidateQueue.shift();
-    try {
-      await peer.pc.addIceCandidate(new RTCIceCandidate(candidateData));
-    } catch (err) {
-      console.error("Error adding queued candidate:", err);
-    }
-  }
-}
-
-function closePeerConnection(peerId) {
-  if (rtcPeers[peerId]) {
-    try {
-      rtcPeers[peerId].pc.close();
-    } catch (e) {}
-    delete rtcPeers[peerId];
-  }
-}
-
-// 상대방 비디오 화면 DOM 생성 및 재생 (iOS / Safari / Chrome 완벽 대응)
-function addOrUpdateRemoteVideo(peerId, stream) {
-  let card = document.getElementById(`video-card-${peerId}`);
-  let video;
-
-  if (!card) {
-    const grid = document.getElementById('video-grid');
-    card = document.createElement('div');
-    card.id = `video-card-${peerId}`;
-    card.className = 'video-card';
-
-    video = document.createElement('video');
-    video.autoplay = true;
-    video.playsInline = true;
-    video.setAttribute('autoplay', 'true');
-    video.setAttribute('playsinline', 'true');
-    video.setAttribute('webkit-playsinline', 'true');
-
-    card.appendChild(video);
-
-    const label = document.createElement('div');
-    label.className = 'video-label';
-    label.innerText = `Player ${peerId.slice(-4)}`;
-    card.appendChild(label);
-
-    grid.appendChild(card);
-  } else {
-    video = card.querySelector('video');
-  }
-
-  if (video && video.srcObject !== stream) {
-    video.srcObject = stream;
-  }
-
-  // 모바일/패드 Autoplay 정책 방어:
-  const playVideo = () => {
-    if (!video) return;
-    video.play().catch(err => {
-      console.warn("Autoplay was blocked by browser policy. Retrying muted...", err);
-      // 브라우저가 소리 때문에 비디오를 막은 경우, 일단 muted로 재생시켜 화면이 나오게 함
-      video.muted = true;
-      video.play().catch(e => console.warn("Retry failed:", e));
-
-      // 사용자가 화면을 터치/클릭하면 소리가 켜지도록 바인딩
-      const unmuteOnClick = () => {
-        video.muted = false;
-        window.removeEventListener('click', unmuteOnClick);
-        window.removeEventListener('touchstart', unmuteOnClick);
-      };
-      window.addEventListener('click', unmuteOnClick, { once: true });
-      window.addEventListener('touchstart', unmuteOnClick, { once: true });
-    });
-  };
-
-  playVideo();
-}
-
-function removeRemoteVideo(peerId) {
-  const card = document.getElementById(`video-card-${peerId}`);
-  if (card && card.parentNode) {
-    card.parentNode.removeChild(card);
-  }
-}
-
-// ==========================================
-// 5. 로컬 플레이어 이동 & 카메라 추적
-// ==========================================
-function updateLocalPlayer(delta) {
+function updateLocalPlayerPhysics(delta) {
   if (!myMesh) return;
 
-  const moveSpeed = 6.0 * delta;
+  // 1. 대시 타이머 업데이트
+  if (dashCooldownTimer > 0) {
+    dashCooldownTimer -= delta;
+  }
+
+  let currentSpeed = NORMAL_SPEED;
+
+  if (isDashing) {
+    dashTimer -= delta;
+    currentSpeed = DASH_SPEED;
+    if (dashTimer <= 0) {
+      isDashing = false;
+    }
+  }
+
+  // 2. 키보드 이동 입력 계산
   let moveX = 0;
   let moveZ = 0;
 
@@ -708,7 +647,7 @@ function updateLocalPlayer(delta) {
 
   const isMoving = (moveX !== 0 || moveZ !== 0);
 
-  if (isMoving) {
+  if (isMoving && !isDashing) {
     const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
     moveX /= length;
     moveZ /= length;
@@ -721,33 +660,91 @@ function updateLocalPlayer(delta) {
       .addScaledVector(right, moveX)
       .normalize();
 
-    myMesh.position.x += moveDir.x * moveSpeed;
-    myMesh.position.z += moveDir.z * moveSpeed;
+    myMesh.position.x += moveDir.x * currentSpeed * delta;
+    myMesh.position.z += moveDir.z * currentSpeed * delta;
 
+    // 이동 방향 회전
     const targetAngle = Math.atan2(moveDir.x, moveDir.z);
     myMesh.rotation.y = lerpAngle(myMesh.rotation.y, targetAngle, 0.25);
 
-    localWalkTimer += delta * 14;
-    myMesh.position.y = Math.abs(Math.sin(localWalkTimer)) * 0.12;
-    myMesh.rotation.z = Math.sin(localWalkTimer) * 0.05;
-
-    sendMyMovement();
+    if (isGrounded) {
+      localWalkTimer += delta * 14;
+      myMesh.rotation.z = Math.sin(localWalkTimer) * 0.05;
+    }
+  } else if (isDashing) {
+    // 대시 중에는 대시 방향으로 빠르게 이동
+    myMesh.position.x += dashDirection.x * currentSpeed * delta;
+    myMesh.position.z += dashDirection.z * currentSpeed * delta;
+    myMesh.rotation.x = 0.25; // 몸체 앞으로 숙임
   } else {
-    myMesh.position.y = THREE.MathUtils.lerp(myMesh.position.y, 0, 0.2);
     myMesh.rotation.z = THREE.MathUtils.lerp(myMesh.rotation.z, 0, 0.2);
+    myMesh.rotation.x = THREE.MathUtils.lerp(myMesh.rotation.x, 0, 0.2);
   }
 
+  // 3. 중력 & 수직 속도 적용
+  playerVelocityY += GRAVITY * delta;
+  myMesh.position.y += playerVelocityY * delta;
+
+  // 4. 점프맵 플랫폼 충돌 판정 (AABB Box Collision)
+  let landedOnPlatform = false;
+  const playerRadius = 0.35;
+  const playerFootY = myMesh.position.y;
+
+  for (const plat of parkourPlatforms) {
+    const minX = plat.x - plat.width / 2 - playerRadius;
+    const maxX = plat.x + plat.width / 2 + playerRadius;
+    const minZ = plat.z - plat.depth / 2 - playerRadius;
+    const maxZ = plat.z + plat.depth / 2 + playerRadius;
+
+    // 수평 범위 체크
+    if (myMesh.position.x >= minX && myMesh.position.x <= maxX &&
+        myMesh.position.z >= minZ && myMesh.position.z <= maxZ) {
+      
+      // 발이 플랫폼 상단 근처에 있고 아래로 떨어지는 중일 때 착지
+      if (playerFootY <= plat.topY + 0.35 && playerFootY >= plat.topY - 0.6 && playerVelocityY <= 0) {
+        myMesh.position.y = plat.topY;
+        playerVelocityY = 0;
+        isGrounded = true;
+        landedOnPlatform = true;
+
+        // 최종 골 플랫폼 도달 체크!
+        if (plat.isGoal && !hasClearedParkour) {
+          hasClearedParkour = true;
+          triggerEmote("🏆");
+          showToast("🎉 축하합니다! 점프맵을 완주하셨습니다! 🏆");
+        }
+        break;
+      }
+    }
+  }
+
+  // 5. 기본 바닥(y = 0) 착지 판정
+  if (!landedOnPlatform) {
+    if (myMesh.position.y <= 0) {
+      myMesh.position.y = 0;
+      playerVelocityY = 0;
+      isGrounded = true;
+      hasClearedParkour = false; // 바닥으로 떨어지면 클리어 상태 리셋
+    } else {
+      isGrounded = false;
+    }
+  }
+
+  // 6. 위치 서버로 전송
+  sendMyMovement();
+
+  // 7. 카메라 추적
   updateCamera();
 }
 
 function updateCamera() {
   if (!myMesh) return;
 
-  cameraPitch = Math.max(0.1, Math.min(Math.PI / 2.3, cameraPitch));
+  cameraPitch = Math.max(0.08, Math.min(Math.PI / 2.3, cameraPitch));
 
   const targetCenter = new THREE.Vector3(
     myMesh.position.x,
-    myMesh.position.y + 1.0,
+    myMesh.position.y + 1.1,
     myMesh.position.z
   );
 
@@ -770,30 +767,21 @@ function lerpAngle(a, b, t) {
 }
 
 // ==========================================
-// 6. 원격 플레이어 보간
+// 7. 원격 플레이어 3D 위치 보간
 // ==========================================
 function updateRemotePlayers(delta) {
   for (const id in players) {
     if (id === myId) continue;
     const p = players[id];
 
-    const dist = p.mesh.position.distanceTo(p.targetPos);
-    p.mesh.position.lerp(p.targetPos, 0.2);
-    p.mesh.rotation.y = lerpAngle(p.mesh.rotation.y, p.targetRot, 0.2);
-
-    if (dist > 0.05) {
-      p.walkTimer += delta * 14;
-      p.mesh.position.y = Math.abs(Math.sin(p.walkTimer)) * 0.12;
-      p.mesh.rotation.z = Math.sin(p.walkTimer) * 0.05;
-    } else {
-      p.mesh.position.y = THREE.MathUtils.lerp(p.mesh.position.y, 0, 0.2);
-      p.mesh.rotation.z = THREE.MathUtils.lerp(p.mesh.rotation.z, 0, 0.2);
-    }
+    // 3차원 위치 Lerp (x, y, z 모두 부드럽게)
+    p.mesh.position.lerp(p.targetPos, 0.25);
+    p.mesh.rotation.y = lerpAngle(p.mesh.rotation.y, p.targetRot, 0.25);
   }
 }
 
 // ==========================================
-// 7. 이벤트 리스너 설정
+// 8. 이벤트 리스너 설정
 // ==========================================
 function setupEventListeners() {
   window.addEventListener('resize', () => {
@@ -802,9 +790,24 @@ function setupEventListeners() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  window.addEventListener('keydown', (e) => handleKey(e.code, true));
-  window.addEventListener('keyup', (e) => handleKey(e.code, false));
+  // 키보드 입력
+  window.addEventListener('keydown', (e) => {
+    handleKey(e.code, true);
 
+    // 단축키: 숫자키 1~6 이모티콘
+    if (e.key === '1') triggerEmote("👋");
+    else if (e.key === '2') triggerEmote("❤️");
+    else if (e.key === '3') triggerEmote("😂");
+    else if (e.key === '4') triggerEmote("🎉");
+    else if (e.key === '5') triggerEmote("🔥");
+    else if (e.key === '6') triggerEmote("🏆");
+  });
+
+  window.addEventListener('keyup', (e) => {
+    handleKey(e.code, false);
+  });
+
+  // 마우스 회전 & 줌
   const container = document.getElementById('canvas-container');
   container.addEventListener('mousedown', (e) => {
     isMouseDown = true;
@@ -825,8 +828,48 @@ function setupEventListeners() {
 
   window.addEventListener('wheel', (e) => {
     cameraDistance += e.deltaY * 0.005;
-    cameraDistance = Math.max(3.0, Math.min(22.0, cameraDistance));
+    cameraDistance = Math.max(3.0, Math.min(24.0, cameraDistance));
   }, { passive: true });
+
+  // 이모티콘 바 버튼 클릭
+  const emoteButtons = document.querySelectorAll('.emote-btn');
+  emoteButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const emote = btn.dataset.emote;
+      if (emote) triggerEmote(emote);
+    });
+  });
+
+  // 시작 위치 리셋 버튼
+  const resetBtn = document.getElementById('reset-pos-btn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      if (myMesh) {
+        myMesh.position.set(0, 1.2, 3);
+        playerVelocityY = 0;
+        showToast("시작 위치로 순간이동했습니다!");
+      }
+    });
+  }
+
+  // 모바일 점프 & 대시 버튼
+  const mobileJumpBtn = document.getElementById('mobile-jump-btn');
+  if (mobileJumpBtn) {
+    mobileJumpBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      performJump();
+    }, { passive: false });
+    mobileJumpBtn.addEventListener('click', performJump);
+  }
+
+  const mobileDashBtn = document.getElementById('mobile-dash-btn');
+  if (mobileDashBtn) {
+    mobileDashBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      performDash();
+    }, { passive: false });
+    mobileDashBtn.addEventListener('click', performDash);
+  }
 
   // 모바일 D-PAD
   const dpadButtons = document.querySelectorAll('.d-btn');
@@ -842,13 +885,13 @@ function setupEventListeners() {
     btn.addEventListener('mouseleave', deactivate);
   });
 
-  // 주소 복사 버튼
+  // 링크 복사 버튼
   const copyBtn = document.getElementById('copy-link-btn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       const url = window.location.href;
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(showToast);
+        navigator.clipboard.writeText(url).then(() => showToast("주소가 복사되었습니다!"));
       } else {
         const temp = document.createElement('input');
         temp.value = url;
@@ -856,49 +899,8 @@ function setupEventListeners() {
         temp.select();
         document.execCommand('copy');
         document.body.removeChild(temp);
-        showToast();
+        showToast("주소가 복사되었습니다!");
       }
-    });
-  }
-}
-
-// 화상통화 컨트롤 리스너
-function setupCallEventListeners() {
-  const joinBtn = document.getElementById('join-call-btn');
-  if (joinBtn) {
-    joinBtn.addEventListener('click', startVideoCall);
-  }
-
-  const leaveBtn = document.getElementById('leave-call-btn');
-  if (leaveBtn) {
-    leaveBtn.addEventListener('click', leaveVideoCall);
-  }
-
-  const micBtn = document.getElementById('toggle-mic-btn');
-  if (micBtn) {
-    micBtn.addEventListener('click', () => {
-      if (!localStream) return;
-      isMicMuted = !isMicMuted;
-      localStream.getAudioTracks().forEach(track => {
-        track.enabled = !isMicMuted;
-      });
-      micBtn.classList.toggle('off', isMicMuted);
-      micBtn.querySelector('.icon').innerText = isMicMuted ? '🔇' : '🎙️';
-      showToast(isMicMuted ? "마이크를 음소거했습니다." : "마이크를 켰습니다.");
-    });
-  }
-
-  const camBtn = document.getElementById('toggle-cam-btn');
-  if (camBtn) {
-    camBtn.addEventListener('click', () => {
-      if (!localStream) return;
-      isCamOff = !isCamOff;
-      localStream.getVideoTracks().forEach(track => {
-        track.enabled = !isCamOff;
-      });
-      camBtn.classList.toggle('off', isCamOff);
-      camBtn.querySelector('.icon').innerText = isCamOff ? '🚫' : '📷';
-      showToast(isCamOff ? "카메라를 껐습니다." : "카메라를 켰습니다.");
     });
   }
 }
@@ -909,19 +911,28 @@ function handleKey(code, isPressed) {
     case 'KeyS': case 'ArrowDown': keys.s = isPressed; break;
     case 'KeyA': case 'ArrowLeft': keys.a = isPressed; break;
     case 'KeyD': case 'ArrowRight': keys.d = isPressed; break;
+    case 'Space':
+      keys.space = isPressed;
+      if (isPressed) performJump();
+      break;
+    case 'ShiftLeft':
+    case 'ShiftRight':
+      keys.shift = isPressed;
+      if (isPressed) performDash();
+      break;
   }
 }
 
-function showToast(msg = "접속 주소가 복사되었습니다!") {
+function showToast(msg) {
   const toast = document.getElementById('toast');
   if (!toast) return;
   toast.innerText = msg;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2500);
+  setTimeout(() => toast.classList.remove('show'), 2600);
 }
 
 // ==========================================
-// 8. 렌더 루프
+// 9. 메인 렌더 루프
 // ==========================================
 let lastTime = performance.now();
 
@@ -932,8 +943,21 @@ function animate() {
   const delta = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
-  updateLocalPlayer(delta);
+  // 1. 트로피 회전 연출
+  if (trophyMesh) {
+    trophyMesh.rotation.y += delta * 1.5;
+  }
+
+  // 2. 내 플레이어 물리/점프/대시 갱신
+  updateLocalPlayerPhysics(delta);
+
+  // 3. 다른 플레이어 위치 보간
   updateRemotePlayers(delta);
+
+  // 4. 이모티콘 팝업 애니메이션 갱신
+  updateEmoteSprites(delta);
+
+  // 5. 렌더
   renderer.render(scene, camera);
 }
 
