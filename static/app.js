@@ -32,13 +32,14 @@ let localStream = null;
 let isInCall = false;
 let isMicMuted = false;
 let isCamOff = false;
-const rtcPeers = {}; // peerId -> RTCPeerConnection
+const rtcPeers = {}; // peerId -> { pc, remoteStream, candidateQueue, isRemoteSet }
 
 // 무료 공개 Google STUN 서버
 const rtcConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' }
   ]
 };
 
@@ -120,7 +121,7 @@ function init() {
 function createAvatarMesh(colorHex, isSelf, nameText, inCall = false) {
   const avatarGroup = new THREE.Group();
 
-  // 몸체 (실린더 + 반구 캡슐)
+  // 몸체
   const bodyGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.9, 16);
   const bodyMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(colorHex),
@@ -144,7 +145,7 @@ function createAvatarMesh(colorHex, isSelf, nameText, inCall = false) {
   bottom.castShadow = true;
   avatarGroup.add(bottom);
 
-  // 앞면 바이저 (바라보는 방향 표시)
+  // 앞면 바이저
   const visorGeo = new THREE.BoxGeometry(0.36, 0.16, 0.16);
   const visorMat = new THREE.MeshStandardMaterial({
     color: 0x090d16,
@@ -168,7 +169,7 @@ function createAvatarMesh(colorHex, isSelf, nameText, inCall = false) {
   shadow.position.y = 0.02;
   avatarGroup.add(shadow);
 
-  // 닉네임 라벨 (통화 중이면 🎥 아이콘 포함)
+  // 닉네임 라벨
   const labelText = inCall ? `🎥 ${nameText}` : nameText;
   const labelSprite = createTextLabel(labelText, isSelf ? "#38bdf8" : (inCall ? "#10b981" : "#ffffff"));
   labelSprite.name = "nameLabel";
@@ -294,6 +295,7 @@ async function handleServerMessage(data) {
   else if (type === 'player_left') {
     removePlayer(data.id);
     closePeerConnection(data.id);
+    removeRemoteVideo(data.id);
     updatePlayerCount();
   }
   else if (type === 'player_call_status') {
@@ -306,7 +308,6 @@ async function handleServerMessage(data) {
 
   // 2) WebRTC 화상통화 시그널링
   else if (type === 'webrtc_existing_peers') {
-    // 내가 통화에 참여했을 때: 기존 참가자들에게 내가 Offer를 생성해 연결 시작
     const existingPeers = data.peers || [];
     for (const peerId of existingPeers) {
       if (peerId !== myId) {
@@ -315,7 +316,6 @@ async function handleServerMessage(data) {
     }
   }
   else if (type === 'webrtc_peer_joined') {
-    // 새 참가자가 통화에 참여함: 새 참가자가 나에게 Offer를 보낼 것이므로 대기
     console.log("New peer joined call:", data.peerId);
   }
   else if (type === 'webrtc_signal') {
@@ -406,28 +406,43 @@ function sendMyMovement() {
 }
 
 // ==========================================
-// 4. WebRTC 실시간 화상통화 로직 (P2P Mesh)
+// 4. WebRTC 실시간 화상통화 로직 (강화된 P2P)
 // ==========================================
 async function startVideoCall() {
   try {
-    // 1. 카메라 & 마이크 권한 요청
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 640 },
-        height: { ideal: 480 },
-        facingMode: "user"
-      },
-      audio: true
-    });
+    // 1. 카메라 & 마이크 권한 요청 (제약조건 실패 시 유연하게 재시도하는 Fallback 구현)
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640, max: 1280 },
+          height: { ideal: 480, max: 720 },
+          facingMode: "user"
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+    } catch (e1) {
+      console.warn("Retrying getUserMedia with relaxed constraints...", e1);
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+    }
 
-    // 2. 내 화면 로컬 비디오에 표시
+    // 2. 내 로컬 비디오 화면에 표시
     const localVideo = document.getElementById('local-video');
     if (localVideo) {
       localVideo.srcObject = localStream;
+      localVideo.muted = true; // 본인 하울링 방지
+      localVideo.setAttribute('playsinline', 'true');
+      localVideo.setAttribute('webkit-playsinline', 'true');
       localVideo.play().catch(e => console.warn("Local video play:", e));
     }
 
-    // 3. UI 전환
+    // 3. UI 활성화
     document.getElementById('join-call-btn').style.display = 'none';
     document.getElementById('active-call-panel').style.display = 'flex';
     isInCall = true;
@@ -440,31 +455,27 @@ async function startVideoCall() {
     showToast("화상통화에 참여했습니다! 📹");
   } catch (err) {
     console.error("Camera access failed:", err);
-    alert("카메라 또는 마이크 권한을 허용해 주셔야 화상통화에 참여할 수 있습니다.");
+    alert("카메라 또는 마이크 권한을 허용해 주세요. (다른 앱에서 카메라를 사용 중인지도 확인해 보세요)");
   }
 }
 
 function leaveVideoCall() {
   if (!isInCall) return;
 
-  // 1. 로컬 스트림 정지
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
   }
 
-  // 2. 모든 Peer 연결 해제
   for (const peerId in rtcPeers) {
     closePeerConnection(peerId);
     removeRemoteVideo(peerId);
   }
 
-  // 3. 서버에 통화 종료 알림
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: 'webrtc_leave' }));
   }
 
-  // 4. UI 원위치
   document.getElementById('active-call-panel').style.display = 'none';
   document.getElementById('join-call-btn').style.display = 'flex';
   isInCall = false;
@@ -472,14 +483,22 @@ function leaveVideoCall() {
   showToast("통화를 종료했습니다.");
 }
 
-// 새 Peer 생성
-function createPeerConnection(peerId) {
+// RTCPeerConnection 생성 및 트랙 관리
+function getOrCreatePeer(peerId) {
   if (rtcPeers[peerId]) return rtcPeers[peerId];
 
   const pc = new RTCPeerConnection(rtcConfiguration);
-  rtcPeers[peerId] = pc;
+  const remoteStream = new MediaStream();
 
-  // 내 오디오/비디오 트랙 등록
+  const peerEntry = {
+    pc: pc,
+    remoteStream: remoteStream,
+    candidateQueue: [],
+    isRemoteSet: false
+  };
+  rtcPeers[peerId] = peerEntry;
+
+  // 로컬 트랙 추가
   if (localStream) {
     localStream.getTracks().forEach(track => {
       pc.addTrack(track, localStream);
@@ -497,34 +516,39 @@ function createPeerConnection(peerId) {
     }
   };
 
-  // 상대방 미디어 트랙 수신 시
+  // 트랙 수신 시 (오디오/비디오 각각 처리)
   pc.ontrack = (event) => {
-    const remoteStream = event.streams[0];
-    addRemoteVideo(peerId, remoteStream);
+    console.log(`Received track from ${peerId}:`, event.track.kind);
+    remoteStream.addTrack(event.track);
+    addOrUpdateRemoteVideo(peerId, remoteStream);
   };
 
   pc.onconnectionstatechange = () => {
+    console.log(`Connection state with ${peerId}:`, pc.connectionState);
     if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
       closePeerConnection(peerId);
       removeRemoteVideo(peerId);
     }
   };
 
-  return pc;
+  return peerEntry;
 }
 
-// 기존 참여자에게 내가 Offer 전송
+// 내가 Offer를 생성해 상대방에게 연결 요청
 async function initiatePeerConnection(peerId) {
-  const pc = createPeerConnection(peerId);
+  const peer = getOrCreatePeer(peerId);
   try {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    const offer = await peer.pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true
+    });
+    await peer.pc.setLocalDescription(offer);
 
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({
         type: 'webrtc_signal',
         targetId: peerId,
-        signal: { sdp: pc.localDescription }
+        signal: { sdp: peer.pc.localDescription }
       }));
     }
   } catch (err) {
@@ -532,19 +556,22 @@ async function initiatePeerConnection(peerId) {
   }
 }
 
-// 상대방 Offer 수신 후 Answer 생성
+// 상대방의 Offer 수신 처리
 async function handleReceiveOffer(senderId, offerSdp) {
-  const pc = createPeerConnection(senderId);
+  const peer = getOrCreatePeer(senderId);
   try {
-    await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    await peer.pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
+    peer.isRemoteSet = true;
+    await processCandidateQueue(peer);
+
+    const answer = await peer.pc.createAnswer();
+    await peer.pc.setLocalDescription(answer);
 
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({
         type: 'webrtc_signal',
         targetId: senderId,
-        signal: { sdp: pc.localDescription }
+        signal: { sdp: peer.pc.localDescription }
       }));
     }
   } catch (err) {
@@ -552,26 +579,41 @@ async function handleReceiveOffer(senderId, offerSdp) {
   }
 }
 
-// Answer 수신 시
+// Answer 수신 처리
 async function handleReceiveAnswer(senderId, answerSdp) {
-  const pc = rtcPeers[senderId];
-  if (pc) {
+  const peer = rtcPeers[senderId];
+  if (peer && peer.pc) {
     try {
-      await pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+      await peer.pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+      peer.isRemoteSet = true;
+      await processCandidateQueue(peer);
     } catch (err) {
       console.error("Error setting remote description from answer:", err);
     }
   }
 }
 
-// ICE Candidate 수신 시
+// ICE Candidate 수신 처리 (RemoteDescription 대기 큐 지원)
 async function handleReceiveCandidate(senderId, candidateData) {
-  const pc = rtcPeers[senderId];
-  if (pc) {
+  const peer = rtcPeers[senderId] || getOrCreatePeer(senderId);
+  if (!peer.isRemoteSet) {
+    peer.candidateQueue.push(candidateData);
+  } else {
     try {
-      await pc.addIceCandidate(new RTCIceCandidate(candidateData));
+      await peer.pc.addIceCandidate(new RTCIceCandidate(candidateData));
     } catch (err) {
       console.error("Error adding ice candidate:", err);
+    }
+  }
+}
+
+async function processCandidateQueue(peer) {
+  while (peer.candidateQueue.length > 0) {
+    const candidateData = peer.candidateQueue.shift();
+    try {
+      await peer.pc.addIceCandidate(new RTCIceCandidate(candidateData));
+    } catch (err) {
+      console.error("Error adding queued candidate:", err);
     }
   }
 }
@@ -579,25 +621,30 @@ async function handleReceiveCandidate(senderId, candidateData) {
 function closePeerConnection(peerId) {
   if (rtcPeers[peerId]) {
     try {
-      rtcPeers[peerId].close();
+      rtcPeers[peerId].pc.close();
     } catch (e) {}
     delete rtcPeers[peerId];
   }
 }
 
-// 상대방 비디오 화면 DOM 추가
-function addRemoteVideo(peerId, stream) {
+// 상대방 비디오 화면 DOM 생성 및 재생 (iOS / Safari / Chrome 완벽 대응)
+function addOrUpdateRemoteVideo(peerId, stream) {
   let card = document.getElementById(`video-card-${peerId}`);
+  let video;
+
   if (!card) {
     const grid = document.getElementById('video-grid');
     card = document.createElement('div');
     card.id = `video-card-${peerId}`;
     card.className = 'video-card';
 
-    const video = document.createElement('video');
+    video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
-    video.srcObject = stream;
+    video.setAttribute('autoplay', 'true');
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+
     card.appendChild(video);
 
     const label = document.createElement('div');
@@ -606,11 +653,35 @@ function addRemoteVideo(peerId, stream) {
     card.appendChild(label);
 
     grid.appendChild(card);
-    video.play().catch(e => console.warn("Remote video play:", e));
   } else {
-    const video = card.querySelector('video');
-    if (video) video.srcObject = stream;
+    video = card.querySelector('video');
   }
+
+  if (video && video.srcObject !== stream) {
+    video.srcObject = stream;
+  }
+
+  // 모바일/패드 Autoplay 정책 방어:
+  const playVideo = () => {
+    if (!video) return;
+    video.play().catch(err => {
+      console.warn("Autoplay was blocked by browser policy. Retrying muted...", err);
+      // 브라우저가 소리 때문에 비디오를 막은 경우, 일단 muted로 재생시켜 화면이 나오게 함
+      video.muted = true;
+      video.play().catch(e => console.warn("Retry failed:", e));
+
+      // 사용자가 화면을 터치/클릭하면 소리가 켜지도록 바인딩
+      const unmuteOnClick = () => {
+        video.muted = false;
+        window.removeEventListener('click', unmuteOnClick);
+        window.removeEventListener('touchstart', unmuteOnClick);
+      };
+      window.addEventListener('click', unmuteOnClick, { once: true });
+      window.addEventListener('touchstart', unmuteOnClick, { once: true });
+    });
+  };
+
+  playVideo();
 }
 
 function removeRemoteVideo(peerId) {
@@ -791,7 +862,7 @@ function setupEventListeners() {
   }
 }
 
-// 화상통화 UI 컨트롤 버튼 리스너
+// 화상통화 컨트롤 리스너
 function setupCallEventListeners() {
   const joinBtn = document.getElementById('join-call-btn');
   if (joinBtn) {
