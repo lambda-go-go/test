@@ -20,6 +20,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 브라우저 캐시 방지 미들웨어 (새로고침 시 항상 최신 파일 반영)
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static") or request.url.path == "/":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 # 정적 파일 디렉토리
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if not os.path.exists(STATIC_DIR):
