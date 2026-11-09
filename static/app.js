@@ -1,34 +1,46 @@
-// --- Three.js & WebSocket Multi-user 3D Space ---
+// --- Three.js & WebSocket & WebRTC Video Call ---
 
-// 전역 상태
+// 3D 전역 상태
 let scene, camera, renderer;
 let myId = null;
 let myColor = null;
 let myMesh = null;
-const players = {}; // id -> { mesh, targetPos, targetRot, isMoving, walkTimer }
+const players = {}; // id -> { mesh, targetPos, targetRot, isMoving, walkTimer, inCall }
 
 // 키 입력 상태
-const keys = {
-  w: false,
-  a: false,
-  s: false,
-  d: false
-};
+const keys = { w: false, a: false, s: false, d: false };
 
-// 카메라 궤도 회전 컨트롤 변수
+// 카메라 컨트롤 변수
 let isMouseDown = false;
 let previousMousePosition = { x: 0, y: 0 };
-let cameraAngleY = 0; // 수평 회전각 (라디안)
-let cameraPitch = 0.45; // 수직 시점 (라디안)
-let cameraDistance = 8.0; // 카메라 거리
+let cameraAngleY = 0;
+let cameraPitch = 0.45;
+let cameraDistance = 8.0;
 
 // 웹소켓
 let socket = null;
 let lastSentTime = 0;
-const SEND_INTERVAL = 33; // ~30fps 전송
+const SEND_INTERVAL = 33; // ~30fps
 
 // 걷기 애니메이션 변수
 let localWalkTimer = 0;
+
+// ==========================================
+// WebRTC 화상통화 상태
+// ==========================================
+let localStream = null;
+let isInCall = false;
+let isMicMuted = false;
+let isCamOff = false;
+const rtcPeers = {}; // peerId -> RTCPeerConnection
+
+// 무료 공개 Google STUN 서버
+const rtcConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
 
 // ==========================================
 // 1. 초기화 함수
@@ -36,12 +48,12 @@ let localWalkTimer = 0;
 function init() {
   const container = document.getElementById('canvas-container');
 
-  // 1-1. 씬 생성
+  // 1-1. Three.js 씬 생성
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b0f19);
   scene.fog = new THREE.FogExp2(0x0b0f19, 0.015);
 
-  // 1-2. 카메라 생성 (FOV 60)
+  // 1-2. 카메라 생성
   camera = new THREE.PerspectiveCamera(
     60,
     window.innerWidth / window.innerHeight,
@@ -67,14 +79,11 @@ function init() {
   dirLight.castShadow = true;
   dirLight.shadow.mapSize.width = 2048;
   dirLight.shadow.mapSize.height = 2048;
-  dirLight.shadow.camera.near = 0.5;
-  dirLight.shadow.camera.far = 150;
   const d = 30;
   dirLight.shadow.camera.left = -d;
   dirLight.shadow.camera.right = d;
   dirLight.shadow.camera.top = d;
   dirLight.shadow.camera.bottom = -d;
-  dirLight.shadow.bias = -0.0005;
   scene.add(dirLight);
 
   // 1-5. 바닥 평면 생성
@@ -86,17 +95,17 @@ function init() {
   });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = 0;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // 1-6. 세련된 격자 (GridHelper)
+  // 1-6. 격자 (GridHelper)
   const gridHelper = new THREE.GridHelper(200, 100, 0x38bdf8, 0x1e293b);
-  gridHelper.position.y = 0.01; // 바닥 z-fighting 방지
+  gridHelper.position.y = 0.01;
   scene.add(gridHelper);
 
   // 1-7. 이벤트 리스너 등록
   setupEventListeners();
+  setupCallEventListeners();
 
   // 1-8. 웹소켓 연결
   connectWebSocket();
@@ -106,12 +115,12 @@ function init() {
 }
 
 // ==========================================
-// 2. 아바타 생성 함수 (기본 도형 조합)
+// 2. 아바타 생성 함수
 // ==========================================
-function createAvatarMesh(colorHex, isSelf, nameText) {
+function createAvatarMesh(colorHex, isSelf, nameText, inCall = false) {
   const avatarGroup = new THREE.Group();
 
-  // 2-1. 몸체 (둥근 캡슐 도형)
+  // 몸체 (실린더 + 반구 캡슐)
   const bodyGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.9, 16);
   const bodyMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(colorHex),
@@ -123,21 +132,19 @@ function createAvatarMesh(colorHex, isSelf, nameText) {
   body.castShadow = true;
   avatarGroup.add(body);
 
-  // 캡슐 상단 반구
   const headGeo = new THREE.SphereGeometry(0.35, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
   const head = new THREE.Mesh(headGeo, bodyMat);
   head.position.y = 1.1;
   head.castShadow = true;
   avatarGroup.add(head);
 
-  // 캡슐 하단 반구
   const bottomGeo = new THREE.SphereGeometry(0.35, 16, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
   const bottom = new THREE.Mesh(bottomGeo, bodyMat);
   bottom.position.y = 0.2;
   bottom.castShadow = true;
   avatarGroup.add(bottom);
 
-  // 2-2. 앞면 바이저 / 눈 (바라보는 방향 표시)
+  // 앞면 바이저 (바라보는 방향 표시)
   const visorGeo = new THREE.BoxGeometry(0.36, 0.16, 0.16);
   const visorMat = new THREE.MeshStandardMaterial({
     color: 0x090d16,
@@ -148,7 +155,7 @@ function createAvatarMesh(colorHex, isSelf, nameText) {
   visor.position.set(0, 0.95, 0.28);
   avatarGroup.add(visor);
 
-  // 2-3. 바닥 그림자 (자체 그림자 보조)
+  // 바닥 그림자
   const shadowGeo = new THREE.CircleGeometry(0.42, 16);
   const shadowMat = new THREE.MeshBasicMaterial({
     color: 0x000000,
@@ -161,37 +168,52 @@ function createAvatarMesh(colorHex, isSelf, nameText) {
   shadow.position.y = 0.02;
   avatarGroup.add(shadow);
 
-  // 2-4. 머리 위 닉네임 텍스트 라벨 (Sprite)
-  const labelSprite = createTextLabel(nameText, isSelf ? "#38bdf8" : "#ffffff");
+  // 닉네임 라벨 (통화 중이면 🎥 아이콘 포함)
+  const labelText = inCall ? `🎥 ${nameText}` : nameText;
+  const labelSprite = createTextLabel(labelText, isSelf ? "#38bdf8" : (inCall ? "#10b981" : "#ffffff"));
+  labelSprite.name = "nameLabel";
   labelSprite.position.set(0, 1.8, 0);
   avatarGroup.add(labelSprite);
 
   return avatarGroup;
 }
 
-// 텍스트 라벨 스프라이트 생성
+function updateAvatarLabel(player) {
+  if (!player || !player.mesh) return;
+  const isSelf = (player.mesh === myMesh);
+  const baseName = isSelf ? "나 (You)" : `Player ${player.mesh.userData.id.slice(-4)}`;
+  const labelText = player.inCall ? `🎥 ${baseName}` : baseName;
+  const color = isSelf ? "#38bdf8" : (player.inCall ? "#10b981" : "#ffffff");
+
+  const oldLabel = player.mesh.getObjectByName("nameLabel");
+  if (oldLabel) player.mesh.remove(oldLabel);
+
+  const newLabel = createTextLabel(labelText, color);
+  newLabel.name = "nameLabel";
+  newLabel.position.set(0, 1.8, 0);
+  player.mesh.add(newLabel);
+}
+
 function createTextLabel(text, textColor) {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
+  canvas.width = 280;
   canvas.height = 64;
   const ctx = canvas.getContext('2d');
 
-  // 배경 둥근 사각형
   ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
-  roundRect(ctx, 10, 10, 236, 44, 12, true);
+  roundRect(ctx, 10, 10, 260, 44, 12, true);
 
-  // 텍스트
-  ctx.font = 'bold 22px sans-serif';
+  ctx.font = 'bold 20px sans-serif';
   ctx.fillStyle = textColor;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, 128, 32);
+  ctx.fillText(text, 140, 32);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearFilter;
   const spriteMat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
   const sprite = new THREE.Sprite(spriteMat);
-  sprite.scale.set(1.8, 0.45, 1);
+  sprite.scale.set(2.0, 0.46, 1);
   return sprite;
 }
 
@@ -211,7 +233,7 @@ function roundRect(ctx, x, y, width, height, radius, fill) {
 }
 
 // ==========================================
-// 3. WebSocket 네트워크 동기화
+// 3. WebSocket 네트워크 동기화 & WebRTC 시그널링
 // ==========================================
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -220,13 +242,13 @@ function connectWebSocket() {
   socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
-    console.log("WebSocket connected to:", wsUrl);
+    console.log("WebSocket connected:", wsUrl);
   };
 
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     try {
       const data = JSON.parse(event.data);
-      handleServerMessage(data);
+      await handleServerMessage(data);
     } catch (err) {
       console.error("Message parse error:", err);
     }
@@ -242,14 +264,13 @@ function connectWebSocket() {
   };
 }
 
-function handleServerMessage(data) {
+async function handleServerMessage(data) {
   const type = data.type;
 
+  // 1) 3D 공간 기본 동기화
   if (type === 'init') {
     myId = data.selfId;
     const initialPlayers = data.players || [];
-    
-    // 현재 접속자 생성
     initialPlayers.forEach(p => {
       addPlayer(p, p.id === myId);
     });
@@ -272,7 +293,48 @@ function handleServerMessage(data) {
   } 
   else if (type === 'player_left') {
     removePlayer(data.id);
+    closePeerConnection(data.id);
     updatePlayerCount();
+  }
+  else if (type === 'player_call_status') {
+    if (players[data.id]) {
+      players[data.id].inCall = data.inCall;
+      updateAvatarLabel(players[data.id]);
+    }
+    updateCallCount();
+  }
+
+  // 2) WebRTC 화상통화 시그널링
+  else if (type === 'webrtc_existing_peers') {
+    // 내가 통화에 참여했을 때: 기존 참가자들에게 내가 Offer를 생성해 연결 시작
+    const existingPeers = data.peers || [];
+    for (const peerId of existingPeers) {
+      if (peerId !== myId) {
+        await initiatePeerConnection(peerId);
+      }
+    }
+  }
+  else if (type === 'webrtc_peer_joined') {
+    // 새 참가자가 통화에 참여함: 새 참가자가 나에게 Offer를 보낼 것이므로 대기
+    console.log("New peer joined call:", data.peerId);
+  }
+  else if (type === 'webrtc_signal') {
+    const senderId = data.senderId;
+    const signal = data.signal;
+
+    if (signal.sdp) {
+      if (signal.sdp.type === 'offer') {
+        await handleReceiveOffer(senderId, signal.sdp);
+      } else if (signal.sdp.type === 'answer') {
+        await handleReceiveAnswer(senderId, signal.sdp);
+      }
+    } else if (signal.candidate) {
+      await handleReceiveCandidate(senderId, signal.candidate);
+    }
+  }
+  else if (type === 'webrtc_peer_left') {
+    closePeerConnection(data.peerId);
+    removeRemoteVideo(data.peerId);
   }
 }
 
@@ -280,7 +342,8 @@ function addPlayer(pData, isSelf) {
   if (players[pData.id]) return;
 
   const displayName = isSelf ? "나 (You)" : `Player ${pData.id.slice(-4)}`;
-  const mesh = createAvatarMesh(pData.color, isSelf, displayName);
+  const mesh = createAvatarMesh(pData.color, isSelf, displayName, pData.inCall || false);
+  mesh.userData = { id: pData.id };
   mesh.position.set(pData.x, pData.y, pData.z);
   mesh.rotation.y = pData.rotation || 0;
   scene.add(mesh);
@@ -290,7 +353,8 @@ function addPlayer(pData, isSelf) {
     targetPos: new THREE.Vector3(pData.x, pData.y, pData.z),
     targetRot: pData.rotation || 0,
     isMoving: false,
-    walkTimer: 0
+    walkTimer: 0,
+    inCall: pData.inCall || false
   };
 
   if (isSelf) {
@@ -309,12 +373,22 @@ function removePlayer(id) {
 function updatePlayerCount() {
   const count = Object.keys(players).length;
   const countEl = document.getElementById('player-count');
-  if (countEl) {
-    countEl.innerText = `온라인: ${count}명`;
+  if (countEl) countEl.innerText = `온라인: ${count}명`;
+}
+
+function updateCallCount() {
+  const inCallCount = Object.values(players).filter(p => p.inCall).length;
+  const badge = document.getElementById('call-count');
+  if (badge) {
+    if (inCallCount > 0) {
+      badge.style.display = 'inline-block';
+      badge.innerText = `📞 통화 중: ${inCallCount}명`;
+    } else {
+      badge.style.display = 'none';
+    }
   }
 }
 
-// 내 위치 서버로 전송
 function sendMyMovement() {
   if (!socket || socket.readyState !== WebSocket.OPEN || !myMesh || !myId) return;
 
@@ -332,7 +406,222 @@ function sendMyMovement() {
 }
 
 // ==========================================
-// 4. 로컬 플레이어 조작 및 카메라 추적
+// 4. WebRTC 실시간 화상통화 로직 (P2P Mesh)
+// ==========================================
+async function startVideoCall() {
+  try {
+    // 1. 카메라 & 마이크 권한 요청
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        facingMode: "user"
+      },
+      audio: true
+    });
+
+    // 2. 내 화면 로컬 비디오에 표시
+    const localVideo = document.getElementById('local-video');
+    if (localVideo) {
+      localVideo.srcObject = localStream;
+      localVideo.play().catch(e => console.warn("Local video play:", e));
+    }
+
+    // 3. UI 전환
+    document.getElementById('join-call-btn').style.display = 'none';
+    document.getElementById('active-call-panel').style.display = 'flex';
+    isInCall = true;
+
+    // 4. 서버에 통화 참여 전송
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'webrtc_join' }));
+    }
+
+    showToast("화상통화에 참여했습니다! 📹");
+  } catch (err) {
+    console.error("Camera access failed:", err);
+    alert("카메라 또는 마이크 권한을 허용해 주셔야 화상통화에 참여할 수 있습니다.");
+  }
+}
+
+function leaveVideoCall() {
+  if (!isInCall) return;
+
+  // 1. 로컬 스트림 정지
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+
+  // 2. 모든 Peer 연결 해제
+  for (const peerId in rtcPeers) {
+    closePeerConnection(peerId);
+    removeRemoteVideo(peerId);
+  }
+
+  // 3. 서버에 통화 종료 알림
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'webrtc_leave' }));
+  }
+
+  // 4. UI 원위치
+  document.getElementById('active-call-panel').style.display = 'none';
+  document.getElementById('join-call-btn').style.display = 'flex';
+  isInCall = false;
+
+  showToast("통화를 종료했습니다.");
+}
+
+// 새 Peer 생성
+function createPeerConnection(peerId) {
+  if (rtcPeers[peerId]) return rtcPeers[peerId];
+
+  const pc = new RTCPeerConnection(rtcConfiguration);
+  rtcPeers[peerId] = pc;
+
+  // 내 오디오/비디오 트랙 등록
+  if (localStream) {
+    localStream.getTracks().forEach(track => {
+      pc.addTrack(track, localStream);
+    });
+  }
+
+  // ICE Candidate 이벤트
+  pc.onicecandidate = (event) => {
+    if (event.candidate && socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'webrtc_signal',
+        targetId: peerId,
+        signal: { candidate: event.candidate }
+      }));
+    }
+  };
+
+  // 상대방 미디어 트랙 수신 시
+  pc.ontrack = (event) => {
+    const remoteStream = event.streams[0];
+    addRemoteVideo(peerId, remoteStream);
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      closePeerConnection(peerId);
+      removeRemoteVideo(peerId);
+    }
+  };
+
+  return pc;
+}
+
+// 기존 참여자에게 내가 Offer 전송
+async function initiatePeerConnection(peerId) {
+  const pc = createPeerConnection(peerId);
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'webrtc_signal',
+        targetId: peerId,
+        signal: { sdp: pc.localDescription }
+      }));
+    }
+  } catch (err) {
+    console.error("Error creating offer:", err);
+  }
+}
+
+// 상대방 Offer 수신 후 Answer 생성
+async function handleReceiveOffer(senderId, offerSdp) {
+  const pc = createPeerConnection(senderId);
+  try {
+    await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'webrtc_signal',
+        targetId: senderId,
+        signal: { sdp: pc.localDescription }
+      }));
+    }
+  } catch (err) {
+    console.error("Error handling offer:", err);
+  }
+}
+
+// Answer 수신 시
+async function handleReceiveAnswer(senderId, answerSdp) {
+  const pc = rtcPeers[senderId];
+  if (pc) {
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+    } catch (err) {
+      console.error("Error setting remote description from answer:", err);
+    }
+  }
+}
+
+// ICE Candidate 수신 시
+async function handleReceiveCandidate(senderId, candidateData) {
+  const pc = rtcPeers[senderId];
+  if (pc) {
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(candidateData));
+    } catch (err) {
+      console.error("Error adding ice candidate:", err);
+    }
+  }
+}
+
+function closePeerConnection(peerId) {
+  if (rtcPeers[peerId]) {
+    try {
+      rtcPeers[peerId].close();
+    } catch (e) {}
+    delete rtcPeers[peerId];
+  }
+}
+
+// 상대방 비디오 화면 DOM 추가
+function addRemoteVideo(peerId, stream) {
+  let card = document.getElementById(`video-card-${peerId}`);
+  if (!card) {
+    const grid = document.getElementById('video-grid');
+    card = document.createElement('div');
+    card.id = `video-card-${peerId}`;
+    card.className = 'video-card';
+
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    card.appendChild(video);
+
+    const label = document.createElement('div');
+    label.className = 'video-label';
+    label.innerText = `Player ${peerId.slice(-4)}`;
+    card.appendChild(label);
+
+    grid.appendChild(card);
+    video.play().catch(e => console.warn("Remote video play:", e));
+  } else {
+    const video = card.querySelector('video');
+    if (video) video.srcObject = stream;
+  }
+}
+
+function removeRemoteVideo(peerId) {
+  const card = document.getElementById(`video-card-${peerId}`);
+  if (card && card.parentNode) {
+    card.parentNode.removeChild(card);
+  }
+}
+
+// ==========================================
+// 5. 로컬 플레이어 이동 & 카메라 추적
 // ==========================================
 function updateLocalPlayer(delta) {
   if (!myMesh) return;
@@ -349,7 +638,6 @@ function updateLocalPlayer(delta) {
   const isMoving = (moveX !== 0 || moveZ !== 0);
 
   if (isMoving) {
-    // 카메라 수평 방향 기준 이동 벡터 계산
     const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
     moveX /= length;
     moveZ /= length;
@@ -365,31 +653,25 @@ function updateLocalPlayer(delta) {
     myMesh.position.x += moveDir.x * moveSpeed;
     myMesh.position.z += moveDir.z * moveSpeed;
 
-    // 이동 방향으로 부드러운 회전 보간
     const targetAngle = Math.atan2(moveDir.x, moveDir.z);
     myMesh.rotation.y = lerpAngle(myMesh.rotation.y, targetAngle, 0.25);
 
-    // 걷기 통통 튀는 바운스 애니메이션
     localWalkTimer += delta * 14;
     myMesh.position.y = Math.abs(Math.sin(localWalkTimer)) * 0.12;
     myMesh.rotation.z = Math.sin(localWalkTimer) * 0.05;
 
-    // 서버로 좌표 전송
     sendMyMovement();
   } else {
-    // 멈췄을 때 원위치 복귀
     myMesh.position.y = THREE.MathUtils.lerp(myMesh.position.y, 0, 0.2);
     myMesh.rotation.z = THREE.MathUtils.lerp(myMesh.rotation.z, 0, 0.2);
   }
 
-  // 3인칭 카메라 추적
   updateCamera();
 }
 
 function updateCamera() {
   if (!myMesh) return;
 
-  // 카메라 피치 제한
   cameraPitch = Math.max(0.1, Math.min(Math.PI / 2.3, cameraPitch));
 
   const targetCenter = new THREE.Vector3(
@@ -409,7 +691,6 @@ function updateCamera() {
   camera.lookAt(targetCenter);
 }
 
-// 각도 보간 (-PI ~ PI 랩핑 대응)
 function lerpAngle(a, b, t) {
   let diff = (b - a) % (Math.PI * 2);
   if (diff < -Math.PI) diff += Math.PI * 2;
@@ -418,21 +699,17 @@ function lerpAngle(a, b, t) {
 }
 
 // ==========================================
-// 5. 원격 플레이어 부드러운 위치 보간 (Lerp)
+// 6. 원격 플레이어 보간
 // ==========================================
 function updateRemotePlayers(delta) {
   for (const id in players) {
     if (id === myId) continue;
     const p = players[id];
 
-    // 위치 Lerp
     const dist = p.mesh.position.distanceTo(p.targetPos);
     p.mesh.position.lerp(p.targetPos, 0.2);
-
-    // 회전 Lerp
     p.mesh.rotation.y = lerpAngle(p.mesh.rotation.y, p.targetRot, 0.2);
 
-    // 원격 유저 걷기 바운스
     if (dist > 0.05) {
       p.walkTimer += delta * 14;
       p.mesh.position.y = Math.abs(Math.sin(p.walkTimer)) * 0.12;
@@ -445,35 +722,25 @@ function updateRemotePlayers(delta) {
 }
 
 // ==========================================
-// 6. 이벤트 리스너 설정
+// 7. 이벤트 리스너 설정
 // ==========================================
 function setupEventListeners() {
-  // 창 크기 변경 대응
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  // 키보드 누름/뗌
-  window.addEventListener('keydown', (e) => {
-    handleKey(e.code, true);
-  });
-  window.addEventListener('keyup', (e) => {
-    handleKey(e.code, false);
-  });
+  window.addEventListener('keydown', (e) => handleKey(e.code, true));
+  window.addEventListener('keyup', (e) => handleKey(e.code, false));
 
-  // 마우스 회전 드래그 & 터치 드래그
   const container = document.getElementById('canvas-container');
-  
   container.addEventListener('mousedown', (e) => {
     isMouseDown = true;
     previousMousePosition = { x: e.clientX, y: e.clientY };
   });
 
-  window.addEventListener('mouseup', () => {
-    isMouseDown = false;
-  });
+  window.addEventListener('mouseup', () => { isMouseDown = false; });
 
   window.addEventListener('mousemove', (e) => {
     if (!isMouseDown) return;
@@ -482,17 +749,15 @@ function setupEventListeners() {
 
     cameraAngleY -= deltaX * 0.005;
     cameraPitch += deltaY * 0.005;
-
     previousMousePosition = { x: e.clientX, y: e.clientY };
   });
 
-  // 휠 줌 인/아웃
   window.addEventListener('wheel', (e) => {
     cameraDistance += e.deltaY * 0.005;
     cameraDistance = Math.max(3.0, Math.min(22.0, cameraDistance));
   }, { passive: true });
 
-  // 모바일 D-PAD 버튼
+  // 모바일 D-PAD
   const dpadButtons = document.querySelectorAll('.d-btn');
   dpadButtons.forEach(btn => {
     const key = btn.dataset.key;
@@ -506,59 +771,86 @@ function setupEventListeners() {
     btn.addEventListener('mouseleave', deactivate);
   });
 
-  // 링크 복사 버튼
+  // 주소 복사 버튼
   const copyBtn = document.getElementById('copy-link-btn');
-  const toast = document.getElementById('toast');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       const url = window.location.href;
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(url).then(showToast);
       } else {
-        // Fallback
-        const tempInput = document.createElement('input');
-        tempInput.value = url;
-        document.body.appendChild(tempInput);
-        tempInput.select();
+        const temp = document.createElement('input');
+        temp.value = url;
+        document.body.appendChild(temp);
+        temp.select();
         document.execCommand('copy');
-        document.body.removeChild(tempInput);
+        document.body.removeChild(temp);
         showToast();
       }
     });
   }
+}
 
-  function showToast() {
-    if (!toast) return;
-    toast.classList.add('show');
-    setTimeout(() => {
-      toast.classList.remove('show');
-    }, 2500);
+// 화상통화 UI 컨트롤 버튼 리스너
+function setupCallEventListeners() {
+  const joinBtn = document.getElementById('join-call-btn');
+  if (joinBtn) {
+    joinBtn.addEventListener('click', startVideoCall);
+  }
+
+  const leaveBtn = document.getElementById('leave-call-btn');
+  if (leaveBtn) {
+    leaveBtn.addEventListener('click', leaveVideoCall);
+  }
+
+  const micBtn = document.getElementById('toggle-mic-btn');
+  if (micBtn) {
+    micBtn.addEventListener('click', () => {
+      if (!localStream) return;
+      isMicMuted = !isMicMuted;
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = !isMicMuted;
+      });
+      micBtn.classList.toggle('off', isMicMuted);
+      micBtn.querySelector('.icon').innerText = isMicMuted ? '🔇' : '🎙️';
+      showToast(isMicMuted ? "마이크를 음소거했습니다." : "마이크를 켰습니다.");
+    });
+  }
+
+  const camBtn = document.getElementById('toggle-cam-btn');
+  if (camBtn) {
+    camBtn.addEventListener('click', () => {
+      if (!localStream) return;
+      isCamOff = !isCamOff;
+      localStream.getVideoTracks().forEach(track => {
+        track.enabled = !isCamOff;
+      });
+      camBtn.classList.toggle('off', isCamOff);
+      camBtn.querySelector('.icon').innerText = isCamOff ? '🚫' : '📷';
+      showToast(isCamOff ? "카메라를 껐습니다." : "카메라를 켰습니다.");
+    });
   }
 }
 
 function handleKey(code, isPressed) {
   switch (code) {
-    case 'KeyW':
-    case 'ArrowUp':
-      keys.w = isPressed;
-      break;
-    case 'KeyS':
-    case 'ArrowDown':
-      keys.s = isPressed;
-      break;
-    case 'KeyA':
-    case 'ArrowLeft':
-      keys.a = isPressed;
-      break;
-    case 'KeyD':
-    case 'ArrowRight':
-      keys.d = isPressed;
-      break;
+    case 'KeyW': case 'ArrowUp': keys.w = isPressed; break;
+    case 'KeyS': case 'ArrowDown': keys.s = isPressed; break;
+    case 'KeyA': case 'ArrowLeft': keys.a = isPressed; break;
+    case 'KeyD': case 'ArrowRight': keys.d = isPressed; break;
   }
 }
 
+function showToast(msg = "접속 주소가 복사되었습니다!") {
+  const toast = document.getElementById('toast');
+  if (!toast) return;
+  toast.innerText = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
 // ==========================================
-// 7. 메인 애니메이션 렌더 루프
+// 8. 렌더 루프
 // ==========================================
 let lastTime = performance.now();
 
@@ -566,18 +858,12 @@ function animate() {
   requestAnimationFrame(animate);
 
   const now = performance.now();
-  const delta = Math.min((now - lastTime) / 1000, 0.1); // 최대 0.1초 델타 캡
+  const delta = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
-  // 1. 내 캐릭터 및 카메라 갱신
   updateLocalPlayer(delta);
-
-  // 2. 다른 플레이어들 위치 보간
   updateRemotePlayers(delta);
-
-  // 3. 렌더
   renderer.render(scene, camera);
 }
 
-// 페이지 로드 후 시작
 window.addEventListener('DOMContentLoaded', init);

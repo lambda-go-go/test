@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>3D Multiplayer Space</title>
+  <title>3D Space - 실시간 가상 공간 & 화상통화</title>
   <link rel="stylesheet" href="/static/style.css">
   <!-- Three.js CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -20,6 +20,7 @@
         <span class="status-dot"></span>
         <span class="title">3D Space</span>
         <span id="player-count" class="badge">온라인: 1명</span>
+        <span id="call-count" class="badge call-badge" style="display: none;">📞 통화 중: 0명</span>
       </div>
       <div class="actions">
         <button id="copy-link-btn" class="btn btn-primary" title="친구에게 보낼 주소 복사">
@@ -58,6 +59,44 @@
           <button class="d-btn left" data-key="KeyA">◀</button>
           <button class="d-btn down" data-key="KeyS">▼</button>
           <button class="d-btn right" data-key="KeyD">▶</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 화면 오른쪽 아래: 화상통화 위젯 -->
+    <div id="call-widget" class="call-widget">
+      <!-- 1. 통화 참여 전: 참여 버튼 -->
+      <button id="join-call-btn" class="btn btn-call-join">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="23 7 16 12 23 17 23 7"></polygon>
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+        </svg>
+        <span>통화 참여</span>
+      </button>
+
+      <!-- 2. 통화 참여 후: 비디오 그리드 및 컨트롤 바 -->
+      <div id="active-call-panel" class="active-call-panel" style="display: none;">
+        <!-- 비디오 목록 그리드 -->
+        <div id="video-grid" class="video-grid">
+          <!-- 로컬(내) 비디오 박스 -->
+          <div id="local-video-container" class="video-card">
+            <video id="local-video" autoplay playsinline muted></video>
+            <div class="video-label">나 (You)</div>
+          </div>
+          <!-- 원격 유저들의 비디오는 동적으로 추가됨 -->
+        </div>
+
+        <!-- 통화 조작 툴바 -->
+        <div class="call-controls">
+          <button id="toggle-mic-btn" class="call-ctrl-btn" title="마이크 켜기/끄기">
+            <span class="icon">🎙️</span>
+          </button>
+          <button id="toggle-cam-btn" class="call-ctrl-btn" title="카메라 켜기/끄기">
+            <span class="icon">📷</span>
+          </button>
+          <button id="leave-call-btn" class="call-ctrl-btn btn-leave" title="통화 종료">
+            <span class="icon">📞</span>
+          </button>
         </div>
       </div>
     </div>

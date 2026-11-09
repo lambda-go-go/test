@@ -88,6 +88,12 @@ html, body {
   border: 1px solid rgba(56, 189, 248, 0.3);
 }
 
+.call-badge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
 .actions {
   display: flex;
   gap: 8px;
@@ -171,12 +177,21 @@ kbd {
     display: block;
     position: absolute;
     bottom: 24px;
-    left: 24px;
+    left: 20px;
     pointer-events: auto;
   }
   
   .instructions-card {
     display: none;
+  }
+
+  .call-widget {
+    bottom: 20px !important;
+    right: 16px !important;
+  }
+
+  .active-call-panel {
+    max-width: 280px !important;
   }
 }
 
@@ -193,8 +208,8 @@ kbd {
 }
 
 .d-btn {
-  width: 52px;
-  height: 52px;
+  width: 50px;
+  height: 50px;
   border-radius: 12px;
   background: rgba(30, 41, 59, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -208,6 +223,174 @@ kbd {
 
 .d-btn:active {
   background: rgba(59, 130, 246, 0.8);
+}
+
+/* ==========================================
+   화상통화 위젯 스타일 (오른쪽 아래)
+========================================== */
+.call-widget {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  z-index: 50;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* 통화 참여 버튼 */
+.btn-call-join {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-call-join:hover {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 6px 22px rgba(16, 185, 129, 0.6);
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+}
+
+.btn-call-join:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 통화 활성 패널 */
+.active-call-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 320px;
+  max-width: 90vw;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.25s ease-out;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 비디오 그리드 */
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 10px;
+}
+
+.video-grid::-webkit-scrollbar {
+  width: 4px;
+}
+.video-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.video-card {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #090d16;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.video-card video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#local-video {
+  transform: scaleX(-1); /* 거울 모드 */
+}
+
+.video-label {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  color: #f3f4f6;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  max-width: 85%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 통화 컨트롤 툴바 */
+.call-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.call-ctrl-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: white;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.call-ctrl-btn:hover {
+  background: rgba(51, 65, 85, 1);
+  transform: scale(1.05);
+}
+
+.call-ctrl-btn.off {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #ef4444;
+}
+
+.call-ctrl-btn.btn-leave {
+  background: #ef4444;
+  border-color: transparent;
+  color: white;
+}
+
+.call-ctrl-btn.btn-leave:hover {
+  background: #dc2626;
+  transform: scale(1.08);
 }
 
 /* 토스트 팝업 */

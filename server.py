@@ -2,14 +2,14 @@ import os
 import random
 import uuid
 import json
-from typing import Dict
+from typing import Dict, Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-app = FastAPI(title="3D Multiplayer Space")
+app = FastAPI(title="3D Multiplayer Space with Video Call")
 
 # CORS 설정
 app.add_middleware(
@@ -42,6 +42,7 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.players: Dict[str, dict] = {}
+        self.call_participants: Set[str] = set()
 
     async def connect(self, websocket: WebSocket) -> str:
         await websocket.accept()
@@ -58,7 +59,8 @@ class ConnectionManager:
             "x": spawn_x,
             "y": 0.0,
             "z": spawn_z,
-            "rotation": 0.0
+            "rotation": 0.0,
+            "inCall": False
         }
         
         self.active_connections[player_id] = websocket
@@ -84,6 +86,16 @@ class ConnectionManager:
             del self.active_connections[player_id]
         if player_id in self.players:
             del self.players[player_id]
+        if player_id in self.call_participants:
+            self.call_participants.remove(player_id)
+
+    async def send_to(self, target_id: str, message: dict):
+        ws = self.active_connections.get(target_id)
+        if ws:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                self.disconnect(target_id)
 
     async def broadcast_except(self, sender_id: str, message: dict):
         dead_connections = []
@@ -115,7 +127,11 @@ async def get_index():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "online_players": len(manager.players)}
+    return {
+        "status": "ok",
+        "online_players": len(manager.players),
+        "call_participants": len(manager.call_participants)
+    }
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -142,15 +158,86 @@ async def websocket_endpoint(websocket: WebSocket):
                     "z": data.get("z", 0.0),
                     "rotation": data.get("rotation", 0.0)
                 })
+
+            # --- WebRTC 화상통화 시그널링 ---
+            elif msg_type == "webrtc_join":
+                # 기존 참여자 목록 추출
+                existing_callers = list(manager.call_participants)
+                manager.call_participants.add(player_id)
+                if player_id in manager.players:
+                    manager.players[player_id]["inCall"] = True
+
+                # 본인에게 기존 참여자 목록 전달
+                await websocket.send_json({
+                    "type": "webrtc_existing_peers",
+                    "peers": existing_callers
+                })
+
+                # 기존 참여자들에게 새 유저 통화 참여 알림
+                for peer_id in existing_callers:
+                    await manager.send_to(peer_id, {
+                        "type": "webrtc_peer_joined",
+                        "peerId": player_id
+                    })
+
+                # 모든 유저에게 아바타 통화 상태 업데이트 브로드캐스트
+                await manager.broadcast_all({
+                    "type": "player_call_status",
+                    "id": player_id,
+                    "inCall": True
+                })
+
+            elif msg_type == "webrtc_leave":
+                if player_id in manager.call_participants:
+                    manager.call_participants.remove(player_id)
+                if player_id in manager.players:
+                    manager.players[player_id]["inCall"] = False
+
+                for peer_id in list(manager.call_participants):
+                    await manager.send_to(peer_id, {
+                        "type": "webrtc_peer_left",
+                        "peerId": player_id
+                    })
+
+                await manager.broadcast_all({
+                    "type": "player_call_status",
+                    "id": player_id,
+                    "inCall": False
+                })
+
+            elif msg_type == "webrtc_signal":
+                # 1:1 WebRTC 시그널 (Offer, Answer, ICE candidate) 중계
+                target_id = data.get("targetId")
+                signal = data.get("signal")
+                if target_id and signal:
+                    await manager.send_to(target_id, {
+                        "type": "webrtc_signal",
+                        "senderId": player_id,
+                        "signal": signal
+                    })
                 
     except WebSocketDisconnect:
+        was_in_call = player_id in manager.call_participants
         manager.disconnect(player_id)
+        if was_in_call:
+            for peer_id in list(manager.call_participants):
+                await manager.send_to(peer_id, {
+                    "type": "webrtc_peer_left",
+                    "peerId": player_id
+                })
         await manager.broadcast_all({
             "type": "player_left",
             "id": player_id
         })
     except Exception as e:
+        was_in_call = player_id in manager.call_participants
         manager.disconnect(player_id)
+        if was_in_call:
+            for peer_id in list(manager.call_participants):
+                await manager.send_to(peer_id, {
+                    "type": "webrtc_peer_left",
+                    "peerId": player_id
+                })
         await manager.broadcast_all({
             "type": "player_left",
             "id": player_id
